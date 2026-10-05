@@ -1,0 +1,16 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: youtube_knowledge_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: youtube_knowledge
+      POSTGRES_USER: youtube_user
+      POSTGRES_PASSWORD: youtube_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
