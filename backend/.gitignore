@@ -1,3 +1,212 @@
+# ==============================
+# Environment Variables / Secrets
+# ==============================
 .env
 .env.*
 !.env.example
+
+# ==============================
+# Python
+# ==============================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python packaging
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ==============================
+# Django
+# ==============================
+*.log
+db.sqlite3
+db.sqlite3-journal
+
+# Django static/media generated files
+staticfiles/
+media/
+
+# ==============================
+# Testing / Coverage
+# ==============================
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.cache/
+coverage.xml
+*.cover
+
+# ==============================
+# Jupyter
+# ==============================
+.ipynb_checkpoints/
+
+# ==============================
+# IDE / Editors
+# ==============================
+.vscode/
+.idea/
+*.iml
+
+# VS Code local history
+.history/
+
+# ==============================
+# OS Generated Files
+# ==============================
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+
+# ==============================
+# Node.js / JavaScript
+# ==============================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build output
+dist/
+build/
+out/
+
+# ==============================
+# Frontend / Extension Builds
+# ==============================
+*.zip
+*.crx
+*.xpi
+
+# Extension build artifacts
+extension/dist/
+extension/build/
+
+# ==============================
+# Browser Extension Files
+# ==============================
+# Chrome extension unpacked/build output
+chrome-extension/dist/
+chrome-extension/build/
+
+# ==============================
+# Temporary Files
+# ==============================
+*.tmp
+*.temp
+*.swp
+*.swo
+*.bak
+*.backup
+
+# ==============================
+# Logs
+# ==============================
+logs/
+*.log
+
+# ==============================
+# Local Development Data
+# ==============================
+*.sqlite
+*.sqlite3
+*.sqlite3-journal
+
+# ==============================
+# AI / ML / Embeddings
+# ==============================
+# Generated vector databases / indexes
+*.faiss
+*.index
+
+# Local model files
+*.gguf
+*.ggml
+*.safetensors
+*.pt
+*.pth
+*.bin
+
+# Generated embeddings / caches
+embeddings/
+vector_db/
+vectordb/
+chroma/
+chroma_db/
+
+# ==============================
+# Generated YouTube Data
+# ==============================
+transcripts/
+downloads/
+videos/
+audio/
+thumbnails/
+
+# Generated notes / exports
+generated/
+exports/
+
+# ==============================
+# Local caches
+# ==============================
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ==============================
+# Secrets / Credentials
+# ==============================
+*.pem
+*.key
+*.crt
+credentials.json
+token.json
+service-account.json
+service_account.json
+
+# ==============================
+# Docker
+# ==============================
+docker-compose.override.yml
+
+# ==============================
+# Local Docker data
+# ==============================
+.docker/
+
+# ==============================
+# Temporary AI/API outputs
+# ==============================
+.ai_cache/
+ai_cache/

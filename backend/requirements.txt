@@ -1,5 +1,8 @@
 Django>=6.1,<6.2
 djangorestframework>=3.18,<3.19
+torch==2.14.1
+transformers==5.18.0
+pgvector==0.4.2
 psycopg[binary]>=3.3,<4
 google-genai>=1.0,<2
 huggingface_hub>=1.0,<3
