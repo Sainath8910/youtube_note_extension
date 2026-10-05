@@ -6,6 +6,33 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import {
+  BadgeCheck,
+  BookOpen,
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
+  Brain,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleHelp,
+  FileText,
+  GraduationCap,
+  GripVertical,
+  Lightbulb,
+  ListChecks,
+  Minus,
+  Moon,
+  Play,
+  Plus,
+  Route,
+  Save,
+  Sun,
+  Tags,
+  Trash2,
+  X,
+} from "lucide-react";
 import { getActiveYouTubeVideoId } from "./youtubeMetadata";
 
 export type NoteBlockType =
@@ -44,7 +71,7 @@ export interface VideoNote {
   updated_at?: string;
 }
 
-interface VideoAnalysis {
+export interface VideoAnalysis {
   id: number;
   video: number;
   summary: string;
@@ -67,6 +94,8 @@ interface SidebarProps {
   videoTitle: string;
   notes: VideoNote[];
   contextStatus: "loading" | "loaded" | "error";
+  analysisStatus: "NOT_STARTED" | "ANALYZING" | "READY" | "FAILED" | null;
+  persistedAnalysis: VideoAnalysis | null;
   transcriptStatus: TranscriptStatus | null;
 }
 
@@ -74,7 +103,9 @@ type ViewMode = "LIST" | "READER" | "WRITER" | "AI";
 
 type Theme = "dark" | "light";
 
-type WorkspaceTab = "READ" | "WRITE" | "AI";
+type PrimaryWorkspace = "NOTES" | "ANALYSIS";
+
+type NoteNavigationTab = "READ" | "WRITE" | "AI";
 
 export type TranscriptStatus =
   | "NOT_STARTED"
@@ -202,21 +233,29 @@ function documentToPlainText(noteDocument: NoteDocument): string {
 }
 
 function formatTimestamp(seconds: number): string {
-  const safeSeconds = Math.max(0, Math.floor(seconds));
-
+  const safeSeconds = Number.isFinite(seconds)
+    ? Math.max(0, Math.round(seconds))
+    : 0;
   const hours = Math.floor(safeSeconds / 3600);
-
   const minutes = Math.floor((safeSeconds % 3600) / 60);
-
   const remainingSeconds = safeSeconds % 60;
+  const formattedMinutes = minutes.toString().padStart(2, "0");
+  const formattedSeconds = remainingSeconds.toString().padStart(2, "0");
 
-  if (hours > 0) {
-    return `${hours}:${minutes.toString().padStart(2, "0")}:${remainingSeconds
-      .toString()
-      .padStart(2, "0")}`;
+  return hours > 0
+    ? `${hours.toString().padStart(2, "0")}:${formattedMinutes}:${formattedSeconds}`
+    : `${formattedMinutes}:${formattedSeconds}`;
+}
+
+function formatUpdatedAt(updatedAt?: string): string | null {
+  if (!updatedAt) {
+    return null;
   }
 
-  return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
+  const timestamp = Date.parse(updatedAt);
+  return Number.isFinite(timestamp)
+    ? new Date(timestamp).toLocaleDateString()
+    : null;
 }
 
 function parseTimestamp(value: string): number | null {
@@ -598,43 +637,86 @@ function isVideoAnalysis(value: unknown): value is VideoAnalysis {
   );
 }
 
-function AnalysisListSection({
+function AnalysisCard({
+  id,
   title,
+  icon,
   colors,
+  expanded,
+  onToggle,
   children,
 }: {
+  id: string;
   title: string;
+  icon: ReactNode;
   colors: ThemeColors;
+  expanded: boolean;
+  onToggle: (id: string) => void;
   children: ReactNode;
 }) {
   return (
-    <div style={{ marginBottom: 12 }}>
-      <h3
+    <section
+      style={{
+        padding: 11,
+        borderRadius: 10,
+        background: colors.surface,
+        border: `1px solid ${colors.border}`,
+      }}
+    >
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => onToggle(id)}
         style={{
-          margin: "0 0 5px",
-          color: colors.primaryText,
-          fontSize: 12,
-          fontWeight: 800,
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          gap: 7,
+          padding: 0,
+          border: "none",
+          background: "transparent",
+          textAlign: "left",
+          cursor: "pointer",
         }}
       >
-        {title}
-      </h3>
-      {children}
-    </div>
+        <span
+          style={{
+            display: "inline-flex",
+            color: colors.accent,
+          }}
+        >
+          {icon}
+        </span>
+        <h3
+          style={{
+            margin: 0,
+            color: colors.primaryText,
+            fontSize: 12,
+            fontWeight: 800,
+            flex: 1,
+          }}
+        >
+          {title}
+        </h3>
+        <span
+          style={{
+            display: "inline-flex",
+            color: colors.muted,
+          }}
+        >
+          {expanded ? (
+            <ChevronDown size={15} aria-hidden="true" />
+          ) : (
+            <ChevronRight size={15} aria-hidden="true" />
+          )}
+        </span>
+      </button>
+      {expanded && <div style={{ marginTop: 8 }}>{children}</div>}
+    </section>
   );
 }
 
-function AnalysisTextList({
-  items,
-  colors,
-}: {
-  items: string[];
-  colors: ThemeColors;
-}) {
-  if (items.length === 0) {
-    return <AnalysisEmptyValue colors={colors} />;
-  }
-
+function AnalysisTextList({ items, colors }: { items: string[]; colors: ThemeColors }) {
   return (
     <ul style={analysisListStyle}>
       {items.map((item, index) => (
@@ -646,10 +728,107 @@ function AnalysisTextList({
   );
 }
 
-function AnalysisEmptyValue({ colors }: { colors: ThemeColors }) {
+function getNonEmptyStrings(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is string =>
+          typeof item === "string" && item.trim().length > 0,
+      )
+    : [];
+}
+
+function getDetailedNotesSections(
+  value: unknown,
+): Array<{ heading: string; content: string }> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter(
+    (section): section is { heading: string; content: string } =>
+      typeof section === "object" &&
+      section !== null &&
+      "heading" in section &&
+      typeof section.heading === "string" &&
+      section.heading.trim().length > 0 &&
+      "content" in section &&
+      typeof section.content === "string" &&
+      section.content.trim().length > 0,
+  );
+}
+
+function analysisSubsectionTitleStyle(colors: ThemeColors): CSSProperties {
+  return {
+    margin: "0 0 4px",
+    color: colors.primaryText,
+    fontSize: 11,
+    fontWeight: 750,
+  };
+}
+
+function AnalysisTimestampList({
+  items,
+  colors,
+}: {
+  items: Array<{ text: string; start: number }>;
+  colors: ThemeColors;
+}) {
+  const [hoveredItem, setHoveredItem] = useState<number | null>(null);
+  const [focusedItem, setFocusedItem] = useState<number | null>(null);
+
   return (
-    <div style={{ color: colors.muted, fontSize: 11 }}>
-      No analysis available.
+    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      {items.map((item, index) => {
+        const isHighlighted = hoveredItem === index || focusedItem === index;
+
+        return (
+          <button
+            key={`${item.start}-${index}`}
+            type="button"
+            onClick={() => jumpToTimestamp(item.start)}
+            onMouseEnter={() => setHoveredItem(index)}
+            onMouseLeave={() => setHoveredItem(null)}
+            onFocus={() => setFocusedItem(index)}
+            onBlur={() => setFocusedItem(null)}
+            style={{
+              width: "100%",
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 8,
+              padding: "7px 8px",
+              border: "none",
+              borderRadius: 7,
+              background: isHighlighted ? colors.accentSoft : "transparent",
+              color: colors.text,
+              textAlign: "left",
+              cursor: "pointer",
+              fontSize: 12,
+              lineHeight: 1.5,
+            }}
+          >
+            <Play
+              size={13}
+              aria-hidden="true"
+              style={{
+                flexShrink: 0,
+                marginTop: 2,
+                color: colors.accent,
+              }}
+            />
+            <span
+              style={{
+                flexShrink: 0,
+                color: colors.accent,
+                fontWeight: 750,
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              {formatTimestamp(item.start)}
+            </span>
+            <span>{item.text}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -996,11 +1175,11 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
                   style={{
                     cursor: "grab",
                     color: colors.muted,
-                    fontSize: 14,
+                    display: "inline-flex",
                     userSelect: "none",
                   }}
                 >
-                  ⋮⋮
+                  <GripVertical size={16} aria-hidden="true" />
                 </span>
 
                 <select
@@ -1047,7 +1226,7 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
                     borderColor: colors.border,
                   }}
                 >
-                  ↑
+                  <ArrowUp size={14} aria-hidden="true" />
                 </button>
 
                 <button
@@ -1064,7 +1243,7 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
                     borderColor: colors.border,
                   }}
                 >
-                  ↓
+                  <ArrowDown size={14} aria-hidden="true" />
                 </button>
 
                 <button
@@ -1077,7 +1256,7 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
                     borderColor: colors.border,
                   }}
                 >
-                  ×
+                  <X size={14} aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -1105,7 +1284,8 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
                   fontWeight: 700,
                 }}
               >
-                ▶ {block.content || "0:00"}
+                <Play size={13} aria-hidden="true" />
+                {block.content || "0:00"}
               </button>
             ) : block.type === "heading" ? (
               <input
@@ -1266,7 +1446,8 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
                   borderColor: colors.border,
                 }}
               >
-                + Image
+                <Plus size={12} aria-hidden="true" />
+                Image
               </button>
 
               <button
@@ -1278,7 +1459,8 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
                   borderColor: colors.border,
                 }}
               >
-                + Image URL
+                <Plus size={12} aria-hidden="true" />
+                Image URL
               </button>
             </div>
           </div>
@@ -1299,7 +1481,8 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
           fontSize: 11,
         }}
       >
-        + Add block
+        <Plus size={12} aria-hidden="true" />
+        Add block
       </button>
     </div>
   );
@@ -1312,24 +1495,9 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
 interface NoteReaderProps {
   note: VideoNote;
   colors: ThemeColors;
-  onBack: () => void;
-  onEdit: () => void;
-  onDelete: () => void;
-  isDeleting: boolean;
-  onGenerateExplanation: () => void;
-  explanationState: "idle" | "loading" | "unavailable";
 }
 
-function NoteReader({
-  note,
-  colors,
-  onBack,
-  onEdit,
-  onDelete,
-  isDeleting,
-  onGenerateExplanation,
-  explanationState,
-}: NoteReaderProps) {
+function NoteReader({ note, colors }: NoteReaderProps) {
   const noteDocument = normalizeDocument(note);
 
   return (
@@ -1340,57 +1508,6 @@ function NoteReader({
         minHeight: "100%",
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "flex-start",
-          gap: 10,
-          marginBottom: 20,
-        }}
-      >
-        <button
-          type="button"
-          onClick={onBack}
-          style={{
-            ...headerActionButton,
-            color: colors.text,
-            borderColor: colors.border,
-            background: colors.surface,
-          }}
-        >
-          ← Back
-        </button>
-
-        <button
-          type="button"
-          onClick={onEdit}
-          style={{
-            ...headerActionButton,
-            color: colors.accent,
-            borderColor: colors.border,
-            background: colors.surface,
-          }}
-        >
-          ✎ Edit
-        </button>
-
-        <button
-          type="button"
-          onClick={onDelete}
-          disabled={isDeleting}
-          style={{
-            ...headerActionButton,
-            color: colors.danger,
-            borderColor: colors.border,
-            background: colors.surface,
-            opacity: isDeleting ? 0.55 : 1,
-          }}
-        >
-          {isDeleting ? "Deleting…" : "Delete"}
-        </button>
-      </div>
-
       <h1
         style={{
           margin: "0 0 18px",
@@ -1471,7 +1588,8 @@ function NoteReader({
                   fontWeight: 700,
                 }}
               >
-                ▶ {block.content}
+                <Play size={13} aria-hidden="true" />
+                {block.content}
               </button>
             );
           }
@@ -1529,63 +1647,6 @@ function NoteReader({
         })}
       </div>
 
-      <div
-        style={{
-          marginTop: 24,
-          paddingTop: 15,
-          borderTop: `1px solid ${colors.border}`,
-        }}
-      >
-        <div
-          style={{
-            fontSize: 12,
-            fontWeight: 800,
-            color: colors.primaryText,
-            marginBottom: 8,
-          }}
-        >
-          Video Intelligence
-        </div>
-
-        <button
-          type="button"
-          onClick={onGenerateExplanation}
-          disabled={explanationState === "loading"}
-          style={{
-            width: "100%",
-            border: `1px solid ${colors.border}`,
-            borderRadius: 9,
-            padding: "10px 12px",
-            background: colors.accentSoft,
-            color: colors.accent,
-            cursor: explanationState === "loading" ? "default" : "pointer",
-            fontSize: 11,
-            fontWeight: 800,
-          }}
-        >
-          {explanationState === "loading"
-            ? "Preparing explanation..."
-            : "✨ Generate detailed explanation from transcript"}
-        </button>
-
-        {explanationState === "unavailable" && (
-          <div
-            style={{
-              marginTop: 8,
-              padding: 10,
-              borderRadius: 8,
-              background: colors.surface,
-              border: `1px solid ${colors.border}`,
-              color: colors.muted,
-              fontSize: 11,
-              lineHeight: 1.5,
-            }}
-          >
-            Transcript intelligence is not connected yet. This UI is ready for
-            the transcript-analysis phase.
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -1598,20 +1659,14 @@ interface NoteWriterProps {
   note: VideoNote | null;
   videoId: string;
   colors: ThemeColors;
-  onBack: () => void;
   onSaved: (note: VideoNote) => void;
-  onDelete: () => void;
-  isDeleting: boolean;
 }
 
 function NoteWriter({
   note,
   videoId,
   colors,
-  onBack,
   onSaved,
-  onDelete,
-  isDeleting,
 }: NoteWriterProps) {
   const [title, setTitle] = useState(note?.title ?? "");
 
@@ -1715,41 +1770,10 @@ function NoteWriter({
         style={{
           display: "flex",
           alignItems: "center",
-          justifyContent: "flex-start",
-          gap: 10,
+          justifyContent: "flex-end",
           marginBottom: 18,
         }}
       >
-        <button
-          type="button"
-          onClick={onBack}
-          style={{
-            ...headerActionButton,
-            color: colors.text,
-            borderColor: colors.border,
-            background: colors.surface,
-          }}
-        >
-          ← Back
-        </button>
-
-        {note && (
-          <button
-            type="button"
-            onClick={onDelete}
-            disabled={isDeleting || isSaving}
-            style={{
-              ...headerActionButton,
-              color: colors.danger,
-              borderColor: colors.border,
-              background: colors.surface,
-              opacity: isDeleting || isSaving ? 0.55 : 1,
-            }}
-          >
-            {isDeleting ? "Deleting…" : "Delete"}
-          </button>
-        )}
-
         <button
           type="button"
           onClick={handleSave}
@@ -1764,7 +1788,7 @@ function NoteWriter({
             cursor: isSaving ? "default" : "pointer",
           }}
         >
-          {isSaving ? "Saving…" : "💾 Save"}
+          {isSaving ? "Saving…" : <><Save size={14} aria-hidden="true" /> Save</>}
         </button>
       </div>
 
@@ -1812,8 +1836,7 @@ function NoteWriter({
         >
           Tip:
         </strong>{" "}
-        Drag the ⋮⋮ handle to rearrange blocks. You can also use ↑ and ↓ to move
-        a block.
+        Drag the handle to rearrange blocks. You can also use the move buttons.
       </div>
 
       {error && (
@@ -1994,6 +2017,314 @@ function AIWorkspace({ colors, videoTitle }: AIWorkspaceProps) {
   );
 }
 
+interface AnalysisWorkspaceProps {
+  colors: ThemeColors;
+  analysis: VideoAnalysis | null;
+  error: string | null;
+  isAnalyzing: boolean;
+  canAnalyze: boolean;
+  onAnalyze: () => void;
+}
+
+function AnalysisWorkspace({
+  colors,
+  analysis,
+  error,
+  isAnalyzing,
+  canAnalyze,
+  onAnalyze,
+}: AnalysisWorkspaceProps) {
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(
+    () => new Set(["summary"]),
+  );
+
+  function toggleSection(id: string) {
+    setExpandedSections((current) => {
+      const next = new Set(current);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  if (!analysis) {
+    return (
+      <div>
+        <h2
+          style={{
+            margin: "0 0 12px",
+            fontSize: 18,
+            fontWeight: 800,
+            color: colors.primaryText,
+          }}
+        >
+          Video Analysis
+        </h2>
+
+        {error && (
+          <div
+            role="alert"
+            style={{
+              marginBottom: 14,
+              padding: 10,
+              borderRadius: 8,
+              background: colors.surface,
+              border: `1px solid ${colors.danger}`,
+              color: colors.danger,
+              fontSize: 11,
+              lineHeight: 1.5,
+            }}
+          >
+            {error}
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={onAnalyze}
+          disabled={isAnalyzing || !canAnalyze}
+          style={{
+            width: "100%",
+            border: "none",
+            borderRadius: 8,
+            padding: "10px 12px",
+            background: colors.accent,
+            color: colors.panel === DARK_THEME.panel ? "#082f49" : "#ffffff",
+            fontSize: 12,
+            fontWeight: 800,
+            cursor: isAnalyzing || !canAnalyze ? "default" : "pointer",
+            opacity: isAnalyzing || !canAnalyze ? 0.65 : 1,
+          }}
+        >
+          {isAnalyzing ? "Analyzing..." : "Analyze Video"}
+        </button>
+      </div>
+    );
+  }
+
+  const detailedNotes =
+    typeof analysis.detailed_notes === "object" &&
+    analysis.detailed_notes !== null &&
+    !Array.isArray(analysis.detailed_notes)
+      ? analysis.detailed_notes
+      : {};
+  const noteSections = getDetailedNotesSections(detailedNotes.sections);
+  const definitions = getNonEmptyStrings(detailedNotes.definitions);
+  const examples = getNonEmptyStrings(detailedNotes.examples);
+  const topics = getNonEmptyStrings(analysis.topics);
+  const concepts = getNonEmptyStrings(analysis.concepts);
+  const prerequisites = getNonEmptyStrings(analysis.prerequisites);
+  const upcomingTopics = getNonEmptyStrings(analysis.upcoming_topics);
+  const keyPoints = Array.isArray(analysis.key_points)
+    ? analysis.key_points.filter(
+        (point) =>
+          typeof point?.text === "string" &&
+          point.text.trim().length > 0 &&
+          typeof point.start === "number" &&
+          Number.isFinite(point.start),
+      )
+    : [];
+  const claims = Array.isArray(analysis.claims)
+    ? analysis.claims.filter(
+        (claim) =>
+          typeof claim?.text === "string" &&
+          claim.text.trim().length > 0 &&
+          typeof claim.start === "number" &&
+          Number.isFinite(claim.start),
+      )
+    : [];
+  const questions = getNonEmptyStrings(analysis.questions);
+
+  return (
+    <div aria-label="AI Video Analysis">
+      <h2
+        style={{
+          margin: "0 0 10px",
+          fontSize: 16,
+          fontWeight: 800,
+          color: colors.primaryText,
+        }}
+      >
+        AI Video Analysis
+      </h2>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+        {analysis.summary.trim() && (
+          <AnalysisCard
+            id="summary"
+            title="Summary"
+            icon={<FileText size={14} />}
+            colors={colors}
+            expanded={expandedSections.has("summary")}
+            onToggle={toggleSection}
+          >
+            <p
+              style={{
+                margin: 0,
+                color: colors.text,
+                fontSize: 12,
+                lineHeight: 1.6,
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {analysis.summary}
+            </p>
+          </AnalysisCard>
+        )}
+
+        {(noteSections.length > 0 ||
+          definitions.length > 0 ||
+          examples.length > 0) && (
+          <AnalysisCard
+            id="detailed-notes"
+            title="Detailed Notes"
+            icon={<BookOpen size={14} />}
+            colors={colors}
+            expanded={expandedSections.has("detailed-notes")}
+            onToggle={toggleSection}
+          >
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {noteSections.map((section, index) => (
+                <div key={`${section.heading}-${index}`}>
+                  <h4
+                    style={{
+                      margin: "0 0 4px",
+                      color: colors.primaryText,
+                      fontSize: 11,
+                      fontWeight: 750,
+                    }}
+                  >
+                    {section.heading}
+                  </h4>
+                  <p
+                    style={{
+                      margin: 0,
+                      color: colors.text,
+                      fontSize: 12,
+                      lineHeight: 1.55,
+                      whiteSpace: "pre-wrap",
+                    }}
+                  >
+                    {section.content}
+                  </p>
+                </div>
+              ))}
+              {definitions.length > 0 && (
+                <div>
+                  <h4 style={analysisSubsectionTitleStyle(colors)}>
+                    Definitions
+                  </h4>
+                  <AnalysisTextList items={definitions} colors={colors} />
+                </div>
+              )}
+              {examples.length > 0 && (
+                <div>
+                  <h4 style={analysisSubsectionTitleStyle(colors)}>Examples</h4>
+                  <AnalysisTextList items={examples} colors={colors} />
+                </div>
+              )}
+            </div>
+          </AnalysisCard>
+        )}
+
+        {topics.length > 0 && (
+          <AnalysisCard
+            id="topics"
+            title="Topics"
+            icon={<Tags size={14} />}
+            colors={colors}
+            expanded={expandedSections.has("topics")}
+            onToggle={toggleSection}
+          >
+            <AnalysisTextList items={topics} colors={colors} />
+          </AnalysisCard>
+        )}
+
+        {concepts.length > 0 && (
+          <AnalysisCard
+            id="concepts"
+            title="Concepts"
+            icon={<Lightbulb size={14} />}
+            colors={colors}
+            expanded={expandedSections.has("concepts")}
+            onToggle={toggleSection}
+          >
+            <AnalysisTextList items={concepts} colors={colors} />
+          </AnalysisCard>
+        )}
+
+        {prerequisites.length > 0 && (
+          <AnalysisCard
+            id="prerequisites"
+            title="Prerequisites"
+            icon={<GraduationCap size={14} />}
+            colors={colors}
+            expanded={expandedSections.has("prerequisites")}
+            onToggle={toggleSection}
+          >
+            <AnalysisTextList items={prerequisites} colors={colors} />
+          </AnalysisCard>
+        )}
+
+        {upcomingTopics.length > 0 && (
+          <AnalysisCard
+            id="upcoming-topics"
+            title="Upcoming Topics"
+            icon={<Route size={14} />}
+            colors={colors}
+            expanded={expandedSections.has("upcoming-topics")}
+            onToggle={toggleSection}
+          >
+            <AnalysisTextList items={upcomingTopics} colors={colors} />
+          </AnalysisCard>
+        )}
+
+        {keyPoints.length > 0 && (
+          <AnalysisCard
+            id="key-points"
+            title="Key Points"
+            icon={<ListChecks size={14} />}
+            colors={colors}
+            expanded={expandedSections.has("key-points")}
+            onToggle={toggleSection}
+          >
+            <AnalysisTimestampList items={keyPoints} colors={colors} />
+          </AnalysisCard>
+        )}
+
+        {claims.length > 0 && (
+          <AnalysisCard
+            id="claims"
+            title="Claims"
+            icon={<BadgeCheck size={14} />}
+            colors={colors}
+            expanded={expandedSections.has("claims")}
+            onToggle={toggleSection}
+          >
+            <AnalysisTimestampList items={claims} colors={colors} />
+          </AnalysisCard>
+        )}
+
+        {questions.length > 0 && (
+          <AnalysisCard
+            id="questions"
+            title="Questions"
+            icon={<CircleHelp size={14} />}
+            colors={colors}
+            expanded={expandedSections.has("questions")}
+            onToggle={toggleSection}
+          >
+            <AnalysisTextList items={questions} colors={colors} />
+          </AnalysisCard>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* Main Sidebar                                                               */
 /* -------------------------------------------------------------------------- */
@@ -2003,8 +2334,12 @@ export default function Sidebar({
   videoTitle,
   notes,
   contextStatus,
+  analysisStatus,
+  persistedAnalysis,
   transcriptStatus,
 }: SidebarProps) {
+  const [activeWorkspace, setActiveWorkspace] =
+    useState<PrimaryWorkspace>("NOTES");
   const [viewMode, setViewMode] = useState<ViewMode>("LIST");
 
   const [currentNotes, setCurrentNotes] = useState(notes);
@@ -2041,6 +2376,9 @@ export default function Sidebar({
 
   const [editingNote, setEditingNote] = useState<VideoNote | null>(null);
 
+  const [hoveredNoteId, setHoveredNoteId] = useState<number | null>(null);
+  const [focusedNoteId, setFocusedNoteId] = useState<number | null>(null);
+
   const [deletePendingNoteId, setDeletePendingNoteId] = useState<number | null>(
     null,
   );
@@ -2056,10 +2394,6 @@ export default function Sidebar({
   const [dragging, setDragging] = useState(false);
 
   const [minimizedDragging, setMinimizedDragging] = useState(false);
-
-  const [explanationState, setExplanationState] = useState<
-    "idle" | "loading" | "unavailable"
-  >("idle");
 
   const dragOffset = useRef<Position>({
     x: 0,
@@ -2119,6 +2453,21 @@ export default function Sidebar({
   }, [videoId]);
 
   useEffect(() => {
+    if (contextStatus !== "loaded") {
+      return;
+    }
+
+    if (
+      persistedAnalysis !== null &&
+      isVideoAnalysis(persistedAnalysis)
+    ) {
+      setVideoAnalysis({ videoId, analysis: persistedAnalysis });
+    } else {
+      setVideoAnalysis(null);
+    }
+  }, [contextStatus, persistedAnalysis, videoId]);
+
+  useEffect(() => {
     if (
       contextStatus === "loaded" &&
       transcriptStatus !== null
@@ -2137,15 +2486,27 @@ export default function Sidebar({
   }, []);
 
   const colors = theme === "dark" ? DARK_THEME : LIGHT_THEME;
+  const persistedCurrentAnalysis =
+    contextStatus === "loaded" &&
+    persistedAnalysis !== null &&
+    isVideoAnalysis(persistedAnalysis)
+      ? persistedAnalysis
+      : null;
   const currentAnalysis =
-    videoAnalysis?.videoId === videoId ? videoAnalysis.analysis : null;
+    videoAnalysis?.videoId === videoId
+      ? videoAnalysis.analysis
+      : persistedCurrentAnalysis;
   const currentAnalysisError =
     analysisError?.videoId === videoId ? analysisError.message : null;
-  const isAnalyzing = analysisLoadingVideoId === videoId;
+  const isAnalyzing =
+    analysisLoadingVideoId === videoId ||
+    (contextStatus === "loaded" && analysisStatus === "ANALYZING");
   const currentTranscriptStatus =
     transcriptState?.videoId === videoId
       ? transcriptState.status
-      : "NOT_STARTED";
+      : contextStatus === "loaded" && transcriptStatus !== null
+        ? transcriptStatus
+        : "NOT_STARTED";
   const currentTranscriptError =
     transcriptError?.videoId === videoId ? transcriptError.message : null;
   const isFetchingTranscript = transcriptLoadingVideoId === videoId;
@@ -2474,7 +2835,6 @@ export default function Sidebar({
         setViewMode("LIST");
       }
 
-      setExplanationState("idle");
     } catch (deleteFailure) {
       setDeleteError(
         deleteFailure instanceof Error
@@ -2492,7 +2852,7 @@ export default function Sidebar({
     root?.remove();
   }
 
-  function handleWorkspaceTab(tab: WorkspaceTab) {
+  function handleNoteNavigation(tab: NoteNavigationTab) {
     if (!selectedNote) {
       return;
     }
@@ -2510,12 +2870,6 @@ export default function Sidebar({
 
     setViewMode("AI");
   }
-
-  /*
-   * Important:
-   * The Read / Write / AI bar is deliberately rendered
-   * only when selectedNote exists.
-   */
 
   if (minimized) {
     return (
@@ -2548,7 +2902,7 @@ export default function Sidebar({
           padding: 0,
         }}
       >
-        🧠
+        <Brain size={22} aria-hidden="true" />
       </button>
     );
   }
@@ -2644,7 +2998,7 @@ export default function Sidebar({
               borderColor: colors.border,
             }}
           >
-            −
+            <Minus size={15} aria-hidden="true" />
           </button>
 
           <button
@@ -2660,7 +3014,11 @@ export default function Sidebar({
               borderColor: colors.border,
             }}
           >
-            {theme === "dark" ? "☀" : "☾"}
+            {theme === "dark" ? (
+              <Sun size={15} aria-hidden="true" />
+            ) : (
+              <Moon size={15} aria-hidden="true" />
+            )}
           </button>
 
           <button
@@ -2674,50 +3032,108 @@ export default function Sidebar({
               borderColor: colors.border,
             }}
           >
-            ×
+            <X size={15} aria-hidden="true" />
           </button>
         </div>
       </div>
 
-      {/* Workspace tabs - ONLY after a note is selected */}
-      {selectedNote && (
+      <div
+        onPointerDown={(event) => event.stopPropagation()}
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(2, 1fr)",
+          gap: 4,
+          padding: "7px 10px",
+          background: colors.header,
+          borderBottom: `1px solid ${colors.border}`,
+        }}
+      >
+        {(
+          [
+            ["NOTES", "Notes"],
+            ["ANALYSIS", "Analysis"],
+          ] as const
+        ).map(([workspace, label]) => {
+          const active = activeWorkspace === workspace;
+          return (
+            <button
+              key={workspace}
+              type="button"
+              onClick={() => setActiveWorkspace(workspace)}
+              style={{
+                border: `1px solid ${active ? colors.accent : colors.border}`,
+                borderRadius: 7,
+                padding: "8px 10px",
+                background: active ? colors.accentSoft : "transparent",
+                color: active ? colors.accent : colors.muted,
+                cursor: "pointer",
+                fontSize: 11,
+                fontWeight: active ? 800 : 650,
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {activeWorkspace === "NOTES" && selectedNote !== null && (
         <div
           onPointerDown={(event) => event.stopPropagation()}
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
+            gridTemplateColumns: "repeat(4, 1fr)",
             gap: 4,
-            padding: "7px 10px",
+            padding: "6px 10px",
             background: colors.surface,
             borderBottom: `1px solid ${colors.border}`,
           }}
         >
+          <button
+            type="button"
+            onClick={returnToList}
+            disabled={viewMode === "LIST" && selectedNote === null}
+            title="Back to notes list"
+            aria-label="Back to notes list"
+            style={{
+              border: `1px solid ${colors.border}`,
+              borderRadius: 7,
+              padding: "7px 8px",
+              background: "transparent",
+              color: colors.muted,
+              cursor:
+                viewMode === "LIST" && selectedNote === null
+                  ? "default"
+                  : "pointer",
+              opacity: viewMode === "LIST" && selectedNote === null ? 0.5 : 1,
+            }}
+          >
+            <ArrowLeft size={14} aria-hidden="true" />
+          </button>
           {(
             [
-              ["READ", "Read"],
-              ["WRITE", "Write"],
-              ["AI", "AI"],
+              ["READ", "Read", "READER"],
+              ["WRITE", "Write", "WRITER"],
+              ["AI", "AI", "AI"],
             ] as const
-          ).map(([value, label]) => {
-            const active =
-              (value === "READ" && viewMode === "READER") ||
-              (value === "WRITE" && viewMode === "WRITER") ||
-              (value === "AI" && viewMode === "AI");
-
+          ).map(([tab, label, mode]) => {
+            const active = viewMode === mode;
             return (
               <button
-                key={value}
+                key={tab}
                 type="button"
-                onClick={() => handleWorkspaceTab(value)}
+                onClick={() => handleNoteNavigation(tab)}
+                disabled={!selectedNote}
                 style={{
                   border: `1px solid ${active ? colors.accent : colors.border}`,
                   borderRadius: 7,
                   padding: "7px 8px",
                   background: active ? colors.accentSoft : "transparent",
                   color: active ? colors.accent : colors.muted,
-                  cursor: "pointer",
+                  cursor: selectedNote ? "pointer" : "default",
                   fontSize: 10,
                   fontWeight: active ? 800 : 650,
+                  opacity: selectedNote ? 1 : 0.5,
                 }}
               >
                 {label}
@@ -2728,7 +3144,7 @@ export default function Sidebar({
       )}
 
       {/* Video title is shown only in the note list, not as a separate section */}
-      {!selectedNote && viewMode === "LIST" && (
+      {activeWorkspace === "NOTES" && !selectedNote && viewMode === "LIST" && (
         <div
           style={{
             padding: "10px 15px",
@@ -2763,7 +3179,7 @@ export default function Sidebar({
           background: colors.panel,
         }}
       >
-        {deleteError && (
+        {activeWorkspace === "NOTES" && deleteError && (
           <div
             role="alert"
             style={{
@@ -2782,8 +3198,73 @@ export default function Sidebar({
         )}
 
         {/* LIST */}
-        {viewMode === "LIST" && (
+        {activeWorkspace === "NOTES" && viewMode === "LIST" && (
           <div>
+            {contextStatus === "loaded" && currentNotes.length > 0 && (
+              <section
+                aria-label="My Previous Context"
+                style={{
+                  marginBottom: 14,
+                  padding: 11,
+                  borderRadius: 10,
+                  background: colors.surface,
+                  border: `1px solid ${colors.border}`,
+                }}
+              >
+                <h2
+                  style={{
+                    margin: "0 0 8px",
+                    fontSize: 12,
+                    fontWeight: 800,
+                    color: colors.primaryText,
+                  }}
+                >
+                  My Previous Context
+                </h2>
+                <div style={{ display: "grid", gap: 5 }}>
+                  {currentNotes.map((note) => (
+                    <button
+                      key={note.id}
+                      type="button"
+                      onClick={() => openReader(note)}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 7,
+                        width: "100%",
+                        minWidth: 0,
+                        padding: "6px 7px",
+                        border: "none",
+                        borderRadius: 6,
+                        background: "transparent",
+                        color: colors.text,
+                        textAlign: "left",
+                        fontSize: 11,
+                        lineHeight: 1.4,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <FileText
+                        size={13}
+                        aria-hidden="true"
+                        style={{ flexShrink: 0, color: colors.muted }}
+                      />
+                      <span
+                        style={{
+                          minWidth: 0,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {note.title || "Untitled note"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+
             <div
               style={{
                 display: "flex",
@@ -2844,20 +3325,22 @@ export default function Sidebar({
                   cursor: "pointer",
                 }}
               >
-                + New Note
+                <Plus size={14} aria-hidden="true" />
+                New Note
               </button>
             </div>
 
-            <section
-              aria-label="Transcript"
-              style={{
-                marginBottom: 14,
-                padding: 12,
-                borderRadius: 10,
-                background: colors.surface,
-                border: `1px solid ${colors.border}`,
-              }}
-            >
+            {currentTranscriptStatus !== "READY" && (
+              <section
+                aria-label="Transcript"
+                style={{
+                  marginBottom: 14,
+                  padding: 12,
+                  borderRadius: 10,
+                  background: colors.surface,
+                  border: `1px solid ${colors.border}`,
+                }}
+              >
               <div
                 style={{
                   display: "flex",
@@ -2879,21 +3362,16 @@ export default function Sidebar({
                 </h2>
                 <span
                   style={{
-                    color:
-                      currentTranscriptStatus === "READY"
-                        ? colors.accent
-                        : colors.muted,
+                    color: colors.muted,
                     fontSize: 11,
                     fontWeight: 700,
                   }}
                 >
-                  {currentTranscriptStatus === "READY"
-                    ? "Ready"
-                    : currentTranscriptStatus === "FETCHING"
-                      ? "Fetching..."
-                      : currentTranscriptStatus === "FAILED"
-                        ? "Failed"
-                        : "Not available"}
+                  {currentTranscriptStatus === "FETCHING"
+                    ? "Fetching..."
+                    : currentTranscriptStatus === "FAILED"
+                      ? "Failed"
+                      : "Not available"}
                 </span>
               </div>
 
@@ -2911,159 +3389,29 @@ export default function Sidebar({
                 </div>
               )}
 
-              <button
-                type="button"
-                onClick={() => void handleFetchTranscript()}
-                disabled={isFetchingTranscript || currentTranscriptStatus === "READY"}
-                style={{
-                  width: "100%",
-                  border: "none",
-                  borderRadius: 8,
-                  padding: "9px 12px",
-                  background: colors.accent,
-                  color: theme === "dark" ? "#082f49" : "#ffffff",
-                  fontSize: 11,
-                  fontWeight: 800,
-                  cursor:
-                    isFetchingTranscript || currentTranscriptStatus === "READY"
-                      ? "default"
-                      : "pointer",
-                  opacity:
-                    isFetchingTranscript || currentTranscriptStatus === "READY"
-                      ? 0.65
-                      : 1,
-                }}
-              >
-                {currentTranscriptStatus === "READY"
-                  ? "Transcript Ready"
-                  : isFetchingTranscript
-                    ? "Retrieving Transcript..."
-                    : "Retrieve Transcript"}
-              </button>
-            </section>
-
-            <button
-              type="button"
-              onClick={() => void handleAnalyzeVideo()}
-              disabled={isAnalyzing || currentTranscriptStatus !== "READY"}
-              style={{
-                width: "100%",
-                marginBottom: 14,
-                border: "none",
-                borderRadius: 8,
-                padding: "10px 12px",
-                background: colors.accent,
-                color: theme === "dark" ? "#082f49" : "#ffffff",
-                fontSize: 12,
-                fontWeight: 800,
-                cursor:
-                  isAnalyzing || currentTranscriptStatus !== "READY"
-                    ? "default"
-                    : "pointer",
-                opacity:
-                  isAnalyzing || currentTranscriptStatus !== "READY"
-                    ? 0.65
-                    : 1,
-              }}
-            >
-              {isAnalyzing ? "Analyzing..." : "Analyze Video"}
-            </button>
-
-            {currentAnalysisError && (
-              <div
-                role="alert"
-                style={{
-                  marginBottom: 14,
-                  padding: 10,
-                  borderRadius: 8,
-                  background: colors.surface,
-                  border: `1px solid ${colors.danger}`,
-                  color: colors.danger,
-                  fontSize: 11,
-                  lineHeight: 1.5,
-                }}
-              >
-                {currentAnalysisError}
-              </div>
-            )}
-
-            {currentAnalysis && (
-              <section
-                aria-label="AI Video Analysis"
-                style={{
-                  marginBottom: 18,
-                  padding: 12,
-                  borderRadius: 10,
-                  background: colors.surface,
-                  border: `1px solid ${colors.border}`,
-                }}
-              >
-                <h2
-                  style={{
-                    margin: "0 0 12px",
-                    fontSize: 15,
-                    fontWeight: 800,
-                    color: colors.primaryText,
-                  }}
-                >
-                  AI Video Analysis
-                </h2>
-
-                <AnalysisListSection
-                  title="Summary"
-                  colors={colors}
-                >
-                  <p
+              {contextStatus === "loaded" && !currentAnalysis && (
+                  <button
+                    type="button"
+                    onClick={() => void handleFetchTranscript()}
+                    disabled={isFetchingTranscript}
                     style={{
-                      margin: 0,
-                      color: colors.text,
-                      fontSize: 12,
-                      lineHeight: 1.6,
-                      whiteSpace: "pre-wrap",
+                      width: "100%",
+                      border: "none",
+                      borderRadius: 8,
+                      padding: "9px 12px",
+                      background: colors.accent,
+                      color: theme === "dark" ? "#082f49" : "#ffffff",
+                      fontSize: 11,
+                      fontWeight: 800,
+                      cursor: isFetchingTranscript ? "default" : "pointer",
+                      opacity: isFetchingTranscript ? 0.65 : 1,
                     }}
                   >
-                    {currentAnalysis.summary}
-                  </p>
-                </AnalysisListSection>
-
-                <AnalysisListSection title="Topics" colors={colors}>
-                  <AnalysisTextList items={currentAnalysis.topics} colors={colors} />
-                </AnalysisListSection>
-
-                <AnalysisListSection title="Concepts" colors={colors}>
-                  <AnalysisTextList
-                    items={currentAnalysis.concepts}
-                    colors={colors}
-                  />
-                </AnalysisListSection>
-
-                <AnalysisListSection title="Key Points" colors={colors}>
-                  {currentAnalysis.key_points.length === 0 ? (
-                    <AnalysisEmptyValue colors={colors} />
-                  ) : (
-                    <ul style={analysisListStyle}>
-                      {currentAnalysis.key_points.map((point, index) => (
-                        <li
-                          key={`${point.start}-${index}`}
-                          style={analysisListItemStyle(colors)}
-                        >
-                          <span style={{ color: colors.accent, fontWeight: 700 }}>
-                            {formatTimestamp(point.start)}
-                          </span>
-                          {" — "}
-                          {point.text}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </AnalysisListSection>
-
-                <AnalysisListSection title="Questions" colors={colors}>
-                  <AnalysisTextList
-                    items={currentAnalysis.questions}
-                    colors={colors}
-                  />
-                </AnalysisListSection>
+                    {isFetchingTranscript
+                      ? "Retrieving Transcript..."
+                      : "Retrieve Transcript"}
+                  </button>
+                )}
               </section>
             )}
 
@@ -3099,11 +3447,12 @@ export default function Sidebar({
               >
                 <div
                   style={{
-                    fontSize: 30,
+                    display: "flex",
+                    justifyContent: "center",
                     marginBottom: 12,
                   }}
                 >
-                  📝
+                  <FileText size={30} aria-hidden="true" />
                 </div>
 
                 <div
@@ -3138,10 +3487,23 @@ export default function Sidebar({
                 {currentNotes.map((note) => (
                   <div
                     key={note.id}
+                    onMouseEnter={() => setHoveredNoteId(note.id)}
+                    onMouseLeave={() => setHoveredNoteId(null)}
+                    onFocusCapture={() => setFocusedNoteId(note.id)}
+                    onBlurCapture={(event) => {
+                      if (
+                        !(event.relatedTarget instanceof Node) ||
+                        !event.currentTarget.contains(event.relatedTarget)
+                      ) {
+                        setFocusedNoteId(null);
+                      }
+                    }}
                     style={{
                       display: "flex",
                       alignItems: "stretch",
-                      gap: 6,
+                      border: `1px solid ${colors.border}`,
+                      borderRadius: 10,
+                      background: colors.surface,
                     }}
                   >
                     <button
@@ -3152,9 +3514,9 @@ export default function Sidebar({
                         minWidth: 0,
                         textAlign: "left",
                         padding: 13,
-                        border: `1px solid ${colors.border}`,
+                        border: "none",
                         borderRadius: 10,
-                        background: colors.surface,
+                        background: "transparent",
                         color: colors.text,
                         cursor: "pointer",
                       }}
@@ -3201,6 +3563,18 @@ export default function Sidebar({
                               documentToPlainText(normalizeDocument(note)) ||
                               "Empty note"}
                           </div>
+
+                          {formatUpdatedAt(note.updated_at) && (
+                            <div
+                              style={{
+                                marginTop: 7,
+                                color: colors.muted,
+                                fontSize: 10,
+                              }}
+                            >
+                              Updated {formatUpdatedAt(note.updated_at)}
+                            </div>
+                          )}
                         </div>
 
                         {note.timestamp_seconds !== null &&
@@ -3234,16 +3608,30 @@ export default function Sidebar({
                       disabled={deletePendingNoteId !== null}
                       title={`Delete ${note.title || "note"}`}
                       aria-label={`Delete ${note.title || "note"}`}
+                      aria-hidden={
+                        hoveredNoteId !== note.id && focusedNoteId !== note.id
+                      }
+                      tabIndex={
+                        hoveredNoteId === note.id || focusedNoteId === note.id
+                          ? 0
+                          : -1
+                      }
                       style={{
                         ...iconButtonStyle,
                         alignSelf: "center",
                         flexShrink: 0,
+                        margin: "0 10px 0 0",
                         color: colors.danger,
-                        borderColor: colors.border,
+                        border: "none",
+                        background: "transparent",
                         opacity: deletePendingNoteId !== null ? 0.55 : 1,
+                        visibility:
+                          hoveredNoteId === note.id || focusedNoteId === note.id
+                            ? "visible"
+                            : "hidden",
                       }}
                     >
-                      ×
+                      <Trash2 size={14} aria-hidden="true" />
                     </button>
                   </div>
                 ))}
@@ -3252,58 +3640,66 @@ export default function Sidebar({
           </div>
         )}
 
+        {/* ANALYSIS */}
+        {activeWorkspace === "ANALYSIS" && (
+          <AnalysisWorkspace
+            colors={colors}
+            analysis={currentAnalysis}
+            error={currentAnalysisError}
+            isAnalyzing={isAnalyzing}
+            canAnalyze={
+              contextStatus === "loaded" &&
+              currentTranscriptStatus === "READY"
+            }
+            onAnalyze={() => void handleAnalyzeVideo()}
+          />
+        )}
+
         {/* READER */}
-        {viewMode === "READER" && selectedNote && (
+        {activeWorkspace === "NOTES" &&
+          viewMode === "READER" &&
+          selectedNote && (
           <NoteReader
             note={selectedNote}
             colors={colors}
-            onBack={returnToList}
-            onEdit={() => openEditor(selectedNote)}
-            onDelete={() => void handleDelete(selectedNote)}
-            isDeleting={deletePendingNoteId === selectedNote.id}
-            onGenerateExplanation={() => {
-              setExplanationState("loading");
-
-              window.setTimeout(() => {
-                setExplanationState("unavailable");
-              }, 500);
-            }}
-            explanationState={explanationState}
           />
         )}
 
         {/* WRITER */}
-        {viewMode === "WRITER" && (
+        {activeWorkspace === "NOTES" && viewMode === "WRITER" && (
           <NoteWriter
             note={editingNote}
             videoId={videoId}
             colors={colors}
-            onBack={() => {
-              if (editingNote) {
-                setSelectedNote(editingNote);
-                setViewMode("READER");
-              } else {
-                returnToList();
-              }
-            }}
             onSaved={handleSaved}
-            onDelete={() => {
-              if (editingNote) {
-                void handleDelete(editingNote);
-              }
-            }}
-            isDeleting={
-              editingNote !== null &&
-              deletePendingNoteId === editingNote.id
-            }
           />
         )}
 
         {/* AI */}
-        {viewMode === "AI" && selectedNote && (
+        {activeWorkspace === "NOTES" && viewMode === "AI" && selectedNote && (
           <AIWorkspace colors={colors} videoTitle={videoTitle} />
         )}
       </div>
+      {currentTranscriptStatus === "READY" && (
+        <div
+          role="status"
+          style={{
+            flexShrink: 0,
+            display: "flex",
+            alignItems: "center",
+            gap: 7,
+            padding: "8px 15px",
+            borderTop: `1px solid ${colors.border}`,
+            background: colors.surface,
+            color: colors.muted,
+            fontSize: 11,
+            fontWeight: 650,
+          }}
+        >
+          <Check size={13} aria-hidden="true" />
+          Transcript Ready
+        </div>
+      )}
     </aside>
   );
 }

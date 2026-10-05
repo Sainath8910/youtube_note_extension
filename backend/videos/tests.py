@@ -9,9 +9,11 @@ from django.test import TestCase as DjangoTestCase
 from rest_framework.test import APIClient
 from youtube_transcript_api._errors import YouTubeTranscriptApiException
 
+from notes.models import Note
 from users.models import User
 from videos.models import Video
 from videos.models import VideoAnalysis
+from videos.serializers import VideoAnalysisSerializer
 from videos.services.analysis import (
     AnalysisError,
     InvalidAnalysisResultError,
@@ -187,6 +189,104 @@ class FetchYouTubeTranscriptTests(TestCase):
             "YouTube could not provide the transcript",
         ):
             fetch_youtube_transcript("abcdefghijk")
+
+
+class VideoContextEndpointTests(DjangoTestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="video-context-user")
+        self.client.force_authenticate(user=self.user)
+        self.url = "/api/videos/abcdefghijk/"
+
+    def test_video_without_analysis_returns_null_analysis(self):
+        video = Video.objects.create(
+            youtube_id="abcdefghijk",
+            title="Example video",
+        )
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["saved"])
+        self.assertEqual(response.data["video"]["id"], video.pk)
+        self.assertEqual(response.data["video"]["youtube_id"], video.youtube_id)
+        self.assertEqual(response.data["video"]["title"], video.title)
+        self.assertIsNone(response.data["video"]["analysis"])
+        self.assertEqual(response.data["notes"], [])
+
+    def test_video_with_analysis_returns_full_persisted_analysis(self):
+        video = Video.objects.create(
+            youtube_id="abcdefghijk",
+            analysis_status=Video.AnalysisStatus.READY,
+        )
+        analysis = VideoAnalysis.objects.create(
+            video=video,
+            summary="Persisted summary.",
+            detailed_notes={"sections": [{"heading": "Topic", "content": "Notes"}]},
+            topics=["topic"],
+            concepts=["concept"],
+            prerequisites=["basics"],
+            upcoming_topics=["next topic"],
+            key_points=[{"text": "Key point.", "start": 1.5}],
+            claims=[{"text": "Claim.", "start": 2.5}],
+            questions=["Question?"],
+            model="persisted-model",
+            analysis_version=3,
+        )
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["video"]["analysis"],
+            VideoAnalysisSerializer(analysis).data,
+        )
+
+    def test_context_preserves_saved_video_and_user_scoped_notes(self):
+        video = Video.objects.create(
+            youtube_id="abcdefghijk",
+            title="Example video",
+        )
+        other_user = User.objects.create_user(username="other-video-context-user")
+        user_note = Note.objects.create(
+            user=self.user,
+            title="My note",
+            document={"version": 1, "blocks": []},
+            note_type=Note.NoteType.VIDEO,
+            video=video,
+        )
+        Note.objects.create(
+            user=other_user,
+            title="Other user's note",
+            document={"version": 1, "blocks": []},
+            note_type=Note.NoteType.VIDEO,
+            video=video,
+        )
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["video"]["youtube_id"],
+            video.youtube_id,
+        )
+        self.assertEqual(
+            [note["id"] for note in response.data["notes"]],
+            [user_note.pk],
+        )
+
+    def test_missing_video_preserves_unsaved_context_response(self):
+        response = self.client.get("/api/videos/zyxwvutsrqp/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data,
+            {
+                "saved": False,
+                "video": None,
+                "notes": [],
+            },
+        )
 
 
 class TranscriptEndpointTests(DjangoTestCase):

@@ -3,30 +3,6 @@ from rest_framework import serializers
 from .models import Video, VideoAnalysis
 
 
-class VideoSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Video
-        fields = [
-            "id",
-            "youtube_id",
-            "title",
-            "channel_name",
-            "channel_handle",
-            "channel_id",
-            "thumbnail_url",
-            "duration_seconds",
-            "transcript_status",
-            "analysis_status",
-            "created_at",
-            "updated_at",
-        ]
-        read_only_fields = [
-            "id",
-            "created_at",
-            "updated_at",
-        ]
-
-
 class VideoAnalysisSerializer(serializers.ModelSerializer):
     class Meta:
         model = VideoAnalysis
@@ -48,3 +24,30 @@ class VideoAnalysisSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = fields
+
+
+class VideoSerializer(serializers.ModelSerializer):
+    analysis = VideoAnalysisSerializer(read_only=True, allow_null=True)
+
+    class Meta:
+        model = Video
+        fields = [
+            "id",
+            "youtube_id",
+            "title",
+            "channel_name",
+            "channel_handle",
+            "channel_id",
+            "thumbnail_url",
+            "duration_seconds",
+            "transcript_status",
+            "analysis_status",
+            "analysis",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "updated_at",
+        ]

@@ -4,6 +4,7 @@ import {
   type Root,
 } from "react-dom/client"
 import Sidebar, {
+  type VideoAnalysis,
   type TranscriptStatus,
   type VideoNote,
 } from "./Sidebar"
@@ -14,6 +15,8 @@ interface VideoContext {
     youtube_id: string
     title: string
     transcript_status: TranscriptStatus
+    analysis_status: "NOT_STARTED" | "ANALYZING" | "READY" | "FAILED"
+    analysis: VideoAnalysis | null
   } | null
   notes: VideoNote[]
 }
@@ -94,6 +97,18 @@ function renderSidebar(
           contextStatus === "loaded" &&
           data.video?.youtube_id === detectedVideoId
             ? data.video.transcript_status
+            : null
+        }
+        analysisStatus={
+          contextStatus === "loaded" &&
+          data.video?.youtube_id === detectedVideoId
+            ? data.video.analysis_status
+            : null
+        }
+        persistedAnalysis={
+          contextStatus === "loaded" &&
+          data.video?.youtube_id === detectedVideoId
+            ? data.video.analysis
             : null
         }
       />
