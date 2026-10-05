@@ -7,6 +7,13 @@ class KnowledgeChunk(models.Model):
     class ContentType(models.TextChoices):
         NOTE = "NOTE", "Note"
         NOTE_BLOCK = "NOTE_BLOCK", "Note block"
+        TRANSCRIPT_CHUNK = "TRANSCRIPT_CHUNK", "Transcript chunk"
+        ANALYSIS_CHUNK = "ANALYSIS_CHUNK", "Analysis chunk"
+
+    class SourceType(models.TextChoices):
+        NOTE = "NOTE", "User note"
+        VIDEO_TRANSCRIPT = "VIDEO_TRANSCRIPT", "Video transcript"
+        VIDEO_ANALYSIS = "VIDEO_ANALYSIS", "Video analysis"
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -42,6 +49,11 @@ class KnowledgeChunk(models.Model):
     content_type = models.CharField(
         max_length=20,
         choices=ContentType.choices,
+    )
+    source_type = models.CharField(
+        max_length=20,
+        choices=SourceType.choices,
+        default=SourceType.NOTE,
     )
     source_block_id = models.CharField(
         max_length=255,

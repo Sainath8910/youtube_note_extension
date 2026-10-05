@@ -30,6 +30,9 @@ class VideoNoteCreateTests(TestCase):
         )
         self.client = APIClient()
         self.client.force_authenticate(self.user)
+        index_patcher = patch("notes.views.index_note")
+        self.index_note = index_patcher.start()
+        self.addCleanup(index_patcher.stop)
         self.payload = {
             "youtube_id": self.youtube_id,
             "title": "Test Note",

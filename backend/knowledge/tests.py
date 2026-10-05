@@ -25,6 +25,7 @@ class KnowledgeChunkModelTests(TestCase):
 
         self.assertEqual(chunk.content, "A searchable note")
         self.assertEqual(chunk.content_type, "NOTE")
+        self.assertEqual(chunk.source_type, KnowledgeChunk.SourceType.NOTE)
         self.assertEqual(chunk.chunk_index, 0)
         self.assertEqual(chunk.user, self.user)
         self.assertEqual(self.user.knowledge_chunks.get(), chunk)
@@ -86,6 +87,50 @@ class KnowledgeChunkModelTests(TestCase):
         self.assertEqual(video.knowledge_chunks.get(), chunk)
         self.assertEqual(folder.knowledge_chunks.get(), chunk)
 
+    def test_video_transcript_chunk_source_classification(self):
+        video = Video.objects.create(youtube_id="transcript-source-1")
+        chunk = KnowledgeChunk.objects.create(
+            user=self.user,
+            video=video,
+            content="Transcript segment",
+            content_type=KnowledgeChunk.ContentType.NOTE_BLOCK,
+            source_type=KnowledgeChunk.SourceType.VIDEO_TRANSCRIPT,
+            metadata={"start": 12.5, "duration": 3.0},
+        )
+
+        reloaded_chunk = KnowledgeChunk.objects.get(pk=chunk.pk)
+        self.assertEqual(
+            reloaded_chunk.source_type,
+            KnowledgeChunk.SourceType.VIDEO_TRANSCRIPT,
+        )
+        self.assertEqual(reloaded_chunk.user, self.user)
+        self.assertEqual(reloaded_chunk.video, video)
+        self.assertIsNone(reloaded_chunk.note)
+        self.assertEqual(
+            reloaded_chunk.metadata,
+            {"start": 12.5, "duration": 3.0},
+        )
+
+    def test_video_analysis_chunk_source_classification(self):
+        video = Video.objects.create(youtube_id="analysis-source-1")
+        chunk = KnowledgeChunk.objects.create(
+            user=self.user,
+            video=video,
+            content="Video analysis summary",
+            content_type=KnowledgeChunk.ContentType.NOTE,
+            source_type=KnowledgeChunk.SourceType.VIDEO_ANALYSIS,
+            metadata={"section": "summary"},
+        )
+
+        reloaded_chunk = KnowledgeChunk.objects.get(pk=chunk.pk)
+        self.assertEqual(
+            reloaded_chunk.source_type,
+            KnowledgeChunk.SourceType.VIDEO_ANALYSIS,
+        )
+        self.assertEqual(reloaded_chunk.user, self.user)
+        self.assertEqual(reloaded_chunk.video, video)
+        self.assertEqual(reloaded_chunk.metadata, {"section": "summary"})
+
     def test_relationships_can_be_null(self):
         chunk = KnowledgeChunk.objects.create(
             user=self.user,
@@ -115,6 +160,27 @@ class KnowledgeChunkModelTests(TestCase):
             user=self.user,
             content="Unsupported source type",
             content_type="TRANSCRIPT",
+        )
+        with self.assertRaises(ValidationError):
+            invalid_chunk.full_clean()
+
+    def test_source_type_choices_are_validated(self):
+        for source_type in KnowledgeChunk.SourceType.values:
+            with self.subTest(source_type=source_type):
+                chunk = KnowledgeChunk(
+                    user=self.user,
+                    content="Valid source type",
+                    content_type=KnowledgeChunk.ContentType.NOTE_BLOCK,
+                    source_type=source_type,
+                    metadata={"source": "test"},
+                )
+                chunk.full_clean()
+
+        invalid_chunk = KnowledgeChunk(
+            user=self.user,
+            content="Unsupported source type",
+            content_type=KnowledgeChunk.ContentType.NOTE,
+            source_type="TRANSCRIPT",
         )
         with self.assertRaises(ValidationError):
             invalid_chunk.full_clean()

@@ -132,6 +132,12 @@ class IndexNoteTests(TestCase):
                 for chunk in chunks
             )
         )
+        self.assertTrue(
+            all(
+                chunk.source_type == KnowledgeChunk.SourceType.NOTE
+                for chunk in chunks
+            )
+        )
 
     def test_empty_and_whitespace_blocks_are_ignored(self):
         self.note.document = {

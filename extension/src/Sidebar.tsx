@@ -34,6 +34,12 @@ import {
   X,
 } from "lucide-react";
 import { getActiveYouTubeVideoId } from "./youtubeMetadata";
+import {
+  sendAskRAG,
+  type AskRAGScope,
+  type RAGAnswer,
+  type RAGSource,
+} from "./ragApi";
 
 export type NoteBlockType =
   | "paragraph"
@@ -505,6 +511,47 @@ function sendDeleteNote(noteId: number): Promise<void> {
       },
     );
   });
+}
+
+function isRAGSource(value: unknown): value is RAGSource {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const source = value as Record<string, unknown>;
+  const nullableInteger = (field: unknown) =>
+    field === null ||
+    (typeof field === "number" && Number.isInteger(field));
+  return (
+    typeof source.chunk_id === "number" &&
+    Number.isInteger(source.chunk_id) &&
+    typeof source.content === "string" &&
+    typeof source.distance === "number" &&
+    Number.isFinite(source.distance) &&
+    nullableInteger(source.note_id) &&
+    nullableInteger(source.video_id) &&
+    nullableInteger(source.folder_id) &&
+    (source.source_block_id === null ||
+      typeof source.source_block_id === "string") &&
+    typeof source.chunk_index === "number" &&
+    Number.isInteger(source.chunk_index) &&
+    typeof source.metadata === "object" &&
+    source.metadata !== null &&
+    !Array.isArray(source.metadata)
+  );
+}
+
+function isRAGAnswer(value: unknown): value is RAGAnswer {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const answer = value as Record<string, unknown>;
+  return (
+    typeof answer.answer === "string" &&
+    Array.isArray(answer.sources) &&
+    answer.sources.every(isRAGSource)
+  );
 }
 
 export interface AnalyzeVideoResponse {
@@ -1884,24 +1931,89 @@ function NoteWriter({
 
 interface AIWorkspaceProps {
   colors: ThemeColors;
-  videoTitle: string;
+  videoId: string;
 }
 
-function AIWorkspace({ colors, videoTitle }: AIWorkspaceProps) {
+function AIWorkspace({ colors, videoId }: AIWorkspaceProps) {
   const [question, setQuestion] = useState("");
+  const [scope, setScope] = useState<AskRAGScope>("CURRENT_VIDEO");
+  const [answer, setAnswer] = useState<RAGAnswer | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const requestInProgress = useRef(false);
+  const requestVersion = useRef(0);
+  const mounted = useRef(false);
 
-  const [message, setMessage] = useState("");
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      requestVersion.current += 1;
+    };
+  }, []);
 
-  function handleAsk() {
-    if (!question.trim()) {
-      setMessage("Please enter a question.");
-
+  async function handleAsk() {
+    if (requestInProgress.current) {
       return;
     }
 
-    setMessage(
-      "AI/RAG is not connected yet. The AI workspace is ready for the RAG phase.",
-    );
+    const trimmedQuestion = question.trim();
+    if (!trimmedQuestion) {
+      setError("Please enter a question.");
+      return;
+    }
+
+    requestInProgress.current = true;
+    const currentRequestVersion = ++requestVersion.current;
+    setAnswer(null);
+    setError(null);
+    setIsLoading(true);
+
+    try {
+      const response = await sendAskRAG(trimmedQuestion, scope, videoId);
+      if (
+        !mounted.current ||
+        currentRequestVersion !== requestVersion.current ||
+        getActiveYouTubeVideoId() !== videoId
+      ) {
+        return;
+      }
+
+      if (!response.success) {
+        setError(
+          response.status === 400
+            ? "Please check your question and try again."
+            : response.status === 502
+              ? "The AI service could not generate an answer. Please try again."
+              : "The AI service is temporarily unavailable. Please try again.",
+        );
+        return;
+      }
+
+      if (!isRAGAnswer(response.data)) {
+        setError("The AI service returned an unexpected response.");
+        return;
+      }
+
+      setAnswer(response.data);
+    } catch {
+      if (
+        mounted.current &&
+        currentRequestVersion === requestVersion.current &&
+        getActiveYouTubeVideoId() === videoId
+      ) {
+        setError("Could not reach the AI service. Please try again.");
+      }
+    } finally {
+      requestInProgress.current = false;
+      if (
+        mounted.current &&
+        currentRequestVersion === requestVersion.current &&
+        getActiveYouTubeVideoId() === videoId
+      ) {
+        setIsLoading(false);
+      }
+    }
   }
 
   return (
@@ -1931,59 +2043,79 @@ function AIWorkspace({ colors, videoTitle }: AIWorkspaceProps) {
             color: colors.muted,
           }}
         >
-          Ask questions about the current video, your notes, or your personal
-          knowledge base.
+          Ask about knowledge from the selected scope.
         </div>
       </div>
 
       <div
+        role="group"
+        aria-label="Knowledge scope"
         style={{
-          padding: 11,
-          borderRadius: 9,
-          background: colors.surface,
+          display: "grid",
+          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+          gap: 5,
+          padding: 4,
           border: `1px solid ${colors.border}`,
+          borderRadius: 10,
+          background: colors.surface,
         }}
       >
-        <div
-          style={{
-            fontSize: 10,
-            color: colors.muted,
-            marginBottom: 4,
-          }}
-        >
-          CURRENT VIDEO
-        </div>
-
-        <div
-          style={{
-            fontSize: 12,
-            color: colors.primaryText,
-            fontWeight: 700,
-          }}
-        >
-          {videoTitle || "YouTube video"}
-        </div>
+        {(
+          [
+            ["CURRENT_VIDEO", "This Video"],
+            ["PERSONAL_KB", "My Knowledge"],
+            ["COMBINED", "Everything"],
+          ] as const
+        ).map(([value, label]) => {
+          const isSelected = scope === value;
+          return (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={isSelected}
+              disabled={isLoading}
+              onClick={() => setScope(value)}
+              style={{
+                minWidth: 0,
+                border: `1px solid ${isSelected ? colors.accent : "transparent"}`,
+                borderRadius: 7,
+                padding: "8px 5px",
+                background: isSelected ? colors.input : "transparent",
+                color: isSelected ? colors.primaryText : colors.muted,
+                fontSize: 11,
+                fontWeight: isSelected ? 750 : 600,
+                cursor: isLoading ? "default" : "pointer",
+                opacity: isLoading ? 0.7 : 1,
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
       </div>
 
       <textarea
         value={question}
         onChange={(event) => {
           setQuestion(event.target.value);
-          setMessage("");
+          setError(null);
         }}
-        placeholder="Ask something about this video..."
+        placeholder="Ask something about your notes..."
         rows={6}
+        disabled={isLoading}
         style={{
           ...editorTextareaStyle,
           color: colors.primaryText,
           background: colors.input,
           borderColor: colors.border,
+          opacity: isLoading ? 0.7 : 1,
         }}
       />
 
       <button
         type="button"
-        onClick={handleAsk}
+        onClick={() => void handleAsk()}
+        disabled={isLoading}
         style={{
           width: "100%",
           border: "none",
@@ -1992,26 +2124,114 @@ function AIWorkspace({ colors, videoTitle }: AIWorkspaceProps) {
           background: colors.accent,
           color: colors.panel === "#0b1220" ? "#082f49" : "#ffffff",
           fontWeight: 800,
-          cursor: "pointer",
+          cursor: isLoading ? "default" : "pointer",
+          opacity: isLoading ? 0.7 : 1,
         }}
       >
-        Ask AI
+        {isLoading ? "Generating answer..." : "Ask AI"}
       </button>
 
-      {message && (
+      {isLoading && (
         <div
+          role="status"
+          style={{
+            color: colors.muted,
+            fontSize: 11,
+          }}
+        >
+          Searching your knowledge and generating an answer...
+        </div>
+      )}
+
+      {error && (
+        <div
+          role="alert"
           style={{
             padding: 10,
             borderRadius: 8,
             background: colors.surface,
-            border: `1px solid ${colors.border}`,
-            color: colors.muted,
+            border: `1px solid ${colors.danger}`,
+            color: colors.danger,
             fontSize: 11,
             lineHeight: 1.5,
           }}
         >
-          {message}
+          {error}
         </div>
+      )}
+
+      {answer && (
+        <section
+          aria-label="AI answer"
+          style={{
+            padding: 12,
+            borderRadius: 9,
+            background: colors.surface,
+            border: `1px solid ${colors.border}`,
+          }}
+        >
+          <h3
+            style={{
+              margin: "0 0 7px",
+              color: colors.primaryText,
+              fontSize: 12,
+              fontWeight: 800,
+            }}
+          >
+            Answer
+          </h3>
+          <p
+            style={{
+              margin: 0,
+              color: colors.text,
+              fontSize: 12,
+              lineHeight: 1.6,
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {answer.answer}
+          </p>
+          {answer.sources.length > 0 && (
+            <div
+              style={{
+                marginTop: 12,
+                paddingTop: 9,
+                borderTop: `1px solid ${colors.border}`,
+              }}
+            >
+              <h4
+                style={{
+                  margin: "0 0 6px",
+                  color: colors.muted,
+                  fontSize: 10,
+                  fontWeight: 800,
+                  textTransform: "uppercase",
+                  letterSpacing: 0.5,
+                }}
+              >
+                Sources
+              </h4>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {answer.sources.map((source, index) => (
+                  <div
+                    key={`${source.chunk_id}-${index}`}
+                    style={{
+                      padding: "7px 8px",
+                      borderRadius: 7,
+                      background: colors.panel,
+                      color: colors.muted,
+                      fontSize: 11,
+                      lineHeight: 1.5,
+                      whiteSpace: "pre-wrap",
+                    }}
+                  >
+                    {source.content}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
       )}
     </div>
   );
@@ -3677,7 +3897,7 @@ export default function Sidebar({
 
         {/* AI */}
         {activeWorkspace === "NOTES" && viewMode === "AI" && selectedNote && (
-          <AIWorkspace colors={colors} videoTitle={videoTitle} />
+          <AIWorkspace colors={colors} videoId={videoId} />
         )}
       </div>
       {currentTranscriptStatus === "READY" && (

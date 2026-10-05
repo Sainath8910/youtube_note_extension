@@ -1,4 +1,67 @@
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === "ASK_RAG") {
+    const question =
+      typeof message.question === "string" ? message.question.trim() : "";
+    const scope =
+      message.scope === "CURRENT_VIDEO" ||
+      message.scope === "PERSONAL_KB" ||
+      message.scope === "COMBINED"
+        ? message.scope
+        : null;
+    const videoId =
+      typeof message.videoId === "string" ? message.videoId.trim() : "";
+    const youtubeId = scope === "PERSONAL_KB" ? null : videoId;
+
+    if (!question || !scope || (scope !== "PERSONAL_KB" && !youtubeId)) {
+      sendResponse({
+        success: false,
+        status: 400,
+        data: null,
+      });
+      return;
+    }
+
+    fetch("http://localhost:8000/api/knowledge/ask/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Dev-User": "devuser",
+      },
+      body: JSON.stringify({
+        question,
+        scope,
+        youtube_id: youtubeId,
+        folder_id: null,
+        top_k: 5,
+      }),
+    })
+      .then(async (response) => {
+        let data: unknown = null;
+        if (response.ok) {
+          try {
+            data = await response.json();
+          } catch {
+            data = null;
+          }
+        }
+
+        sendResponse({
+          success: response.ok,
+          status: response.status,
+          data,
+        });
+      })
+      .catch(() => {
+        sendResponse({
+          success: false,
+          status: 0,
+          data: null,
+        });
+      });
+
+    return true;
+  }
+
   /*
    * --------------------------------------------------
    * GET VIDEO CONTEXT

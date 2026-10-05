@@ -120,6 +120,7 @@ def index_note(note):
                 folder=note.folder,
                 content=chunk_data["content"],
                 content_type=KnowledgeChunk.ContentType.NOTE_BLOCK,
+                source_type=KnowledgeChunk.SourceType.NOTE,
                 source_block_id=chunk_data["source_block_id"],
                 chunk_index=chunk_index,
                 metadata=chunk_data["metadata"],

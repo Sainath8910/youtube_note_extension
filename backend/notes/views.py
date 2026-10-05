@@ -5,7 +5,9 @@ from django.db import transaction
 from rest_framework import generics
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.exceptions import APIException
 
+from knowledge.services.indexing import index_note
 from videos.models import Video
 from videos.serializers import VideoSerializer
 from videos.services.youtube import (
@@ -21,6 +23,22 @@ from .serializers import NoteSerializer
 logger = logging.getLogger(__name__)
 
 
+class NoteIndexingUnavailable(APIException):
+    status_code = status.HTTP_502_BAD_GATEWAY
+    default_detail = "The note could not be synchronized to the knowledge base."
+    default_code = "note_indexing_unavailable"
+
+
+@transaction.atomic
+def _save_and_index_note(serializer, **save_kwargs):
+    note = serializer.save(**save_kwargs)
+    try:
+        index_note(note)
+    except Exception as error:
+        raise NoteIndexingUnavailable from error
+    return note
+
+
 class NoteListCreateView(generics.ListCreateAPIView):
     serializer_class = NoteSerializer
 
@@ -33,7 +51,7 @@ class NoteListCreateView(generics.ListCreateAPIView):
         )
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        _save_and_index_note(serializer, user=self.request.user)
 
 
 class NoteDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -43,6 +61,9 @@ class NoteDetailView(generics.RetrieveUpdateDestroyAPIView):
         return Note.objects.filter(
             user=self.request.user
         )
+
+    def perform_update(self, serializer):
+        _save_and_index_note(serializer)
 
 
 class VideoNoteCreateView(generics.CreateAPIView):
@@ -120,10 +141,10 @@ class VideoNoteCreateView(generics.CreateAPIView):
 
         serializer.is_valid(raise_exception=True)
 
-        note = serializer.save(
+        note = _save_and_index_note(
+            serializer,
             user=request.user,
         )
-
         return Response(
             {
                 "video_created": created,
