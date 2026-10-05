@@ -1,5 +1,8 @@
 Django>=6.1,<6.2
 djangorestframework>=3.18,<3.19
 psycopg[binary]>=3.3,<4
+google-genai>=1.0,<2
+huggingface_hub>=1.0,<3
 python-dotenv>=1.2,<2
 yt-dlp>=2025.1.1
+youtube-transcript-api>=1.2,<2

@@ -4,6 +4,7 @@ import {
   type Root,
 } from "react-dom/client"
 import Sidebar, {
+  type TranscriptStatus,
   type VideoNote,
 } from "./Sidebar"
 
@@ -12,6 +13,7 @@ interface VideoContext {
   video: {
     youtube_id: string
     title: string
+    transcript_status: TranscriptStatus
   } | null
   notes: VideoNote[]
 }
@@ -88,6 +90,12 @@ function renderSidebar(
             : []
         }
         contextStatus={contextStatus}
+        transcriptStatus={
+          contextStatus === "loaded" &&
+          data.video?.youtube_id === detectedVideoId
+            ? data.video.transcript_status
+            : null
+        }
       />
     </React.StrictMode>,
   )

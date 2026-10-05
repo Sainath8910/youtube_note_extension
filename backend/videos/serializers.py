@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Video
+from .models import Video, VideoAnalysis
 
 
 class VideoSerializer(serializers.ModelSerializer):
@@ -25,3 +25,26 @@ class VideoSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+
+class VideoAnalysisSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VideoAnalysis
+        fields = [
+            "id",
+            "video",
+            "summary",
+            "detailed_notes",
+            "topics",
+            "concepts",
+            "prerequisites",
+            "upcoming_topics",
+            "key_points",
+            "claims",
+            "questions",
+            "model",
+            "analysis_version",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields

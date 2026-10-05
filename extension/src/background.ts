@@ -50,6 +50,148 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   /*
    * --------------------------------------------------
+   * ANALYZE VIDEO
+   * --------------------------------------------------
+   */
+  if (message.type === "ANALYZE_VIDEO") {
+    const videoId =
+      typeof message.videoId === "string" ? message.videoId.trim() : "";
+
+    if (!videoId) {
+      sendResponse({
+        success: false,
+        error: "Video ID is missing.",
+      });
+
+      return;
+    }
+
+    fetch(
+      `http://localhost:8000/api/videos/${encodeURIComponent(videoId)}/analyze/`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Dev-User": "devuser",
+        },
+        body: JSON.stringify({}),
+      },
+    )
+      .then(async (response) => {
+        const responseText = await response.text();
+        let data: unknown;
+
+        try {
+          data = responseText ? JSON.parse(responseText) : null;
+        } catch {
+          data = {
+            error: responseText || response.statusText,
+          };
+        }
+
+        sendResponse({
+          success: response.ok,
+          status: response.status,
+          data,
+          ...(!response.ok && {
+            error:
+              typeof data === "object" &&
+              data !== null &&
+              "error" in data &&
+              typeof data.error === "string"
+                ? data.error
+                : `API request failed: ${response.status} ${response.statusText}`,
+          }),
+        });
+      })
+      .catch((error) => {
+        console.error("[YouTube Knowledge] Analyze video error:", error);
+
+        sendResponse({
+          success: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to analyze video.",
+        });
+      });
+
+    return true;
+  }
+
+  /*
+   * --------------------------------------------------
+   * FETCH TRANSCRIPT
+   * --------------------------------------------------
+   */
+  if (message.type === "FETCH_TRANSCRIPT") {
+    const videoId =
+      typeof message.videoId === "string" ? message.videoId.trim() : "";
+
+    if (!videoId) {
+      sendResponse({
+        success: false,
+        error: "Video ID is missing.",
+      });
+
+      return;
+    }
+
+    fetch(
+      `http://localhost:8000/api/videos/${encodeURIComponent(videoId)}/transcript/`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Dev-User": "devuser",
+        },
+        body: JSON.stringify({}),
+      },
+    )
+      .then(async (response) => {
+        const responseText = await response.text();
+        let data: unknown;
+
+        try {
+          data = responseText ? JSON.parse(responseText) : null;
+        } catch {
+          data = {
+            error: responseText || response.statusText,
+          };
+        }
+
+        sendResponse({
+          success: response.ok,
+          status: response.status,
+          data,
+          ...(!response.ok && {
+            error:
+              typeof data === "object" &&
+              data !== null &&
+              "error" in data &&
+              typeof data.error === "string"
+                ? data.error
+                : `API request failed: ${response.status} ${response.statusText}`,
+          }),
+        });
+      })
+      .catch((error) => {
+        console.error("[YouTube Knowledge] Fetch transcript error:", error);
+
+        sendResponse({
+          success: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to fetch transcript.",
+        });
+      });
+
+    return true;
+  }
+
+  /*
+   * --------------------------------------------------
    * CREATE NOTE
    * --------------------------------------------------
    */
@@ -193,6 +335,64 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           success: false,
           error:
             error instanceof Error ? error.message : "Failed to update note.",
+        });
+      });
+
+    return true;
+  }
+
+  /*
+   * --------------------------------------------------
+   * DELETE NOTE
+   * --------------------------------------------------
+   */
+  if (message.type === "DELETE_NOTE") {
+    const noteId = message.noteId;
+
+    if (!noteId) {
+      sendResponse({
+        success: false,
+        error: "Note ID is missing.",
+      });
+
+      return;
+    }
+
+    fetch(`http://localhost:8000/api/notes/${noteId}/`, {
+      method: "DELETE",
+      headers: {
+        "X-Dev-User": "devuser",
+      },
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          const responseText = await response.text();
+          let errorMessage = responseText;
+
+          try {
+            const data = JSON.parse(responseText);
+            errorMessage = data?.detail || data?.error || responseText;
+          } catch {
+            // Keep the response text when the server did not return JSON.
+          }
+
+          throw new Error(
+            errorMessage ||
+              `API request failed: ${response.status} ${response.statusText}`,
+          );
+        }
+
+        sendResponse({
+          success: true,
+        });
+      })
+      .catch((error) => {
+        console.error("[YouTube Knowledge] Delete note error:", error);
+
+        sendResponse({
+          success: false,
+          error:
+            error instanceof Error ? error.message : "Failed to delete note.",
         });
       });
 

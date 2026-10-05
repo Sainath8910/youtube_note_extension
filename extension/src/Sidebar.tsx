@@ -4,6 +4,7 @@ import {
   useState,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 import { getActiveYouTubeVideoId } from "./youtubeMetadata";
 
@@ -43,12 +44,30 @@ export interface VideoNote {
   updated_at?: string;
 }
 
+interface VideoAnalysis {
+  id: number;
+  video: number;
+  summary: string;
+  detailed_notes: Record<string, unknown>;
+  topics: string[];
+  concepts: string[];
+  prerequisites: string[];
+  upcoming_topics: string[];
+  key_points: Array<{ text: string; start: number }>;
+  claims: Array<{ text: string; start: number }>;
+  questions: string[];
+  model: string;
+  analysis_version: number;
+  created_at: string;
+  updated_at: string;
+}
+
 interface SidebarProps {
   videoId: string;
   videoTitle: string;
   notes: VideoNote[];
   contextStatus: "loading" | "loaded" | "error";
-  onNoteCreated?: () => void;
+  transcriptStatus: TranscriptStatus | null;
 }
 
 type ViewMode = "LIST" | "READER" | "WRITER" | "AI";
@@ -56,6 +75,12 @@ type ViewMode = "LIST" | "READER" | "WRITER" | "AI";
 type Theme = "dark" | "light";
 
 type WorkspaceTab = "READ" | "WRITE" | "AI";
+
+export type TranscriptStatus =
+  | "NOT_STARTED"
+  | "FETCHING"
+  | "READY"
+  | "FAILED";
 
 interface Position {
   x: number;
@@ -411,10 +436,236 @@ function sendUpdateNote(
           return;
         }
 
-        resolve(response.data.note);
+        resolve(response.data);
       },
     );
   });
+}
+
+function sendDeleteNote(noteId: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(
+      {
+        type: "DELETE_NOTE",
+        noteId,
+      },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+
+          return;
+        }
+
+        if (!response?.success) {
+          reject(new Error(response?.error || "Failed to delete note."));
+
+          return;
+        }
+
+        resolve();
+      },
+    );
+  });
+}
+
+export interface AnalyzeVideoResponse {
+  success: boolean;
+  status: number;
+  data: unknown;
+  error?: string;
+}
+
+export function sendAnalyzeVideo(
+  videoId: string,
+): Promise<AnalyzeVideoResponse> {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(
+      {
+        type: "ANALYZE_VIDEO",
+        videoId,
+      },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+
+          return;
+        }
+
+        if (!response || typeof response.status !== "number") {
+          reject(new Error(response?.error || "Failed to analyze video."));
+
+          return;
+        }
+
+        resolve({
+          success: response.success === true,
+          status: response.status,
+          data: response.data,
+          ...(typeof response.error === "string" && {
+            error: response.error,
+          }),
+        });
+      },
+    );
+  });
+}
+
+export function sendFetchTranscript(
+  videoId: string,
+): Promise<AnalyzeVideoResponse> {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(
+      {
+        type: "FETCH_TRANSCRIPT",
+        videoId,
+      },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+
+          return;
+        }
+
+        if (!response || typeof response.status !== "number") {
+          reject(new Error(response?.error || "Failed to fetch transcript."));
+
+          return;
+        }
+
+        resolve({
+          success: response.success === true,
+          status: response.status,
+          data: response.data,
+          ...(typeof response.error === "string" && {
+            error: response.error,
+          }),
+        });
+      },
+    );
+  });
+}
+
+function isVideoAnalysis(value: unknown): value is VideoAnalysis {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const analysis = value as Record<string, unknown>;
+  return (
+    typeof analysis.id === "number" &&
+    typeof analysis.video === "number" &&
+    typeof analysis.summary === "string" &&
+    typeof analysis.detailed_notes === "object" &&
+    analysis.detailed_notes !== null &&
+    Array.isArray(analysis.topics) &&
+    analysis.topics.every((topic) => typeof topic === "string") &&
+    Array.isArray(analysis.concepts) &&
+    analysis.concepts.every((concept) => typeof concept === "string") &&
+    Array.isArray(analysis.prerequisites) &&
+    analysis.prerequisites.every(
+      (prerequisite) => typeof prerequisite === "string",
+    ) &&
+    Array.isArray(analysis.upcoming_topics) &&
+    analysis.upcoming_topics.every((topic) => typeof topic === "string") &&
+    Array.isArray(analysis.key_points) &&
+    analysis.key_points.every(
+      (point) =>
+        typeof point === "object" &&
+        point !== null &&
+        "text" in point &&
+        typeof point.text === "string" &&
+        "start" in point &&
+        typeof point.start === "number" &&
+        Number.isFinite(point.start),
+    ) &&
+    Array.isArray(analysis.claims) &&
+    analysis.claims.every(
+      (claim) =>
+        typeof claim === "object" &&
+        claim !== null &&
+        "text" in claim &&
+        typeof claim.text === "string" &&
+        "start" in claim &&
+        typeof claim.start === "number" &&
+        Number.isFinite(claim.start),
+    ) &&
+    Array.isArray(analysis.questions) &&
+    analysis.questions.every((question) => typeof question === "string") &&
+    typeof analysis.model === "string" &&
+    typeof analysis.analysis_version === "number" &&
+    typeof analysis.created_at === "string" &&
+    typeof analysis.updated_at === "string"
+  );
+}
+
+function AnalysisListSection({
+  title,
+  colors,
+  children,
+}: {
+  title: string;
+  colors: ThemeColors;
+  children: ReactNode;
+}) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <h3
+        style={{
+          margin: "0 0 5px",
+          color: colors.primaryText,
+          fontSize: 12,
+          fontWeight: 800,
+        }}
+      >
+        {title}
+      </h3>
+      {children}
+    </div>
+  );
+}
+
+function AnalysisTextList({
+  items,
+  colors,
+}: {
+  items: string[];
+  colors: ThemeColors;
+}) {
+  if (items.length === 0) {
+    return <AnalysisEmptyValue colors={colors} />;
+  }
+
+  return (
+    <ul style={analysisListStyle}>
+      {items.map((item, index) => (
+        <li key={`${item}-${index}`} style={analysisListItemStyle(colors)}>
+          {item}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function AnalysisEmptyValue({ colors }: { colors: ThemeColors }) {
+  return (
+    <div style={{ color: colors.muted, fontSize: 11 }}>
+      No analysis available.
+    </div>
+  );
+}
+
+const analysisListStyle: CSSProperties = {
+  margin: 0,
+  paddingLeft: 18,
+  fontSize: 12,
+  lineHeight: 1.55,
+};
+
+function analysisListItemStyle(colors: ThemeColors): CSSProperties {
+  return {
+    marginBottom: 4,
+    color: colors.text,
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1063,6 +1314,8 @@ interface NoteReaderProps {
   colors: ThemeColors;
   onBack: () => void;
   onEdit: () => void;
+  onDelete: () => void;
+  isDeleting: boolean;
   onGenerateExplanation: () => void;
   explanationState: "idle" | "loading" | "unavailable";
 }
@@ -1072,6 +1325,8 @@ function NoteReader({
   colors,
   onBack,
   onEdit,
+  onDelete,
+  isDeleting,
   onGenerateExplanation,
   explanationState,
 }: NoteReaderProps) {
@@ -1089,7 +1344,7 @@ function NoteReader({
         style={{
           display: "flex",
           alignItems: "center",
-          justifyContent: "space-between",
+          justifyContent: "flex-start",
           gap: 10,
           marginBottom: 20,
         }}
@@ -1118,6 +1373,21 @@ function NoteReader({
           }}
         >
           ✎ Edit
+        </button>
+
+        <button
+          type="button"
+          onClick={onDelete}
+          disabled={isDeleting}
+          style={{
+            ...headerActionButton,
+            color: colors.danger,
+            borderColor: colors.border,
+            background: colors.surface,
+            opacity: isDeleting ? 0.55 : 1,
+          }}
+        >
+          {isDeleting ? "Deleting…" : "Delete"}
         </button>
       </div>
 
@@ -1330,6 +1600,8 @@ interface NoteWriterProps {
   colors: ThemeColors;
   onBack: () => void;
   onSaved: (note: VideoNote) => void;
+  onDelete: () => void;
+  isDeleting: boolean;
 }
 
 function NoteWriter({
@@ -1338,6 +1610,8 @@ function NoteWriter({
   colors,
   onBack,
   onSaved,
+  onDelete,
+  isDeleting,
 }: NoteWriterProps) {
   const [title, setTitle] = useState(note?.title ?? "");
 
@@ -1441,7 +1715,7 @@ function NoteWriter({
         style={{
           display: "flex",
           alignItems: "center",
-          justifyContent: "space-between",
+          justifyContent: "flex-start",
           gap: 10,
           marginBottom: 18,
         }}
@@ -1458,6 +1732,23 @@ function NoteWriter({
         >
           ← Back
         </button>
+
+        {note && (
+          <button
+            type="button"
+            onClick={onDelete}
+            disabled={isDeleting || isSaving}
+            style={{
+              ...headerActionButton,
+              color: colors.danger,
+              borderColor: colors.border,
+              background: colors.surface,
+              opacity: isDeleting || isSaving ? 0.55 : 1,
+            }}
+          >
+            {isDeleting ? "Deleting…" : "Delete"}
+          </button>
+        )}
 
         <button
           type="button"
@@ -1712,13 +2003,49 @@ export default function Sidebar({
   videoTitle,
   notes,
   contextStatus,
-  onNoteCreated,
+  transcriptStatus,
 }: SidebarProps) {
   const [viewMode, setViewMode] = useState<ViewMode>("LIST");
+
+  const [currentNotes, setCurrentNotes] = useState(notes);
+
+  const [videoAnalysis, setVideoAnalysis] = useState<{
+    videoId: string;
+    analysis: VideoAnalysis;
+  } | null>(null);
+
+  const [analysisLoadingVideoId, setAnalysisLoadingVideoId] = useState<
+    string | null
+  >(null);
+
+  const [analysisError, setAnalysisError] = useState<{
+    videoId: string;
+    message: string;
+  } | null>(null);
+
+  const [transcriptState, setTranscriptState] = useState<{
+    videoId: string;
+    status: TranscriptStatus;
+  } | null>(null);
+
+  const [transcriptLoadingVideoId, setTranscriptLoadingVideoId] = useState<
+    string | null
+  >(null);
+
+  const [transcriptError, setTranscriptError] = useState<{
+    videoId: string;
+    message: string;
+  } | null>(null);
 
   const [selectedNote, setSelectedNote] = useState<VideoNote | null>(null);
 
   const [editingNote, setEditingNote] = useState<VideoNote | null>(null);
+
+  const [deletePendingNoteId, setDeletePendingNoteId] = useState<number | null>(
+    null,
+  );
+
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const [minimized, setMinimized] = useState(false);
 
@@ -1746,6 +2073,11 @@ export default function Sidebar({
 
   const savePositionTimeout = useRef<number | null>(null);
 
+  const analysisRequestVersion = useRef(0);
+  const transcriptRequestVersion = useRef(0);
+  const currentVideoIdRef = useRef(videoId);
+  currentVideoIdRef.current = videoId;
+
   useEffect(() => {
     let mounted = true;
 
@@ -1767,6 +2099,36 @@ export default function Sidebar({
   }, []);
 
   useEffect(() => {
+    setCurrentNotes(notes);
+  }, [notes]);
+
+  useEffect(() => {
+    analysisRequestVersion.current += 1;
+    setVideoAnalysis(null);
+    setAnalysisLoadingVideoId(null);
+    setAnalysisError(null);
+    transcriptRequestVersion.current += 1;
+    setTranscriptState(null);
+    setTranscriptLoadingVideoId(null);
+    setTranscriptError(null);
+
+    return () => {
+      analysisRequestVersion.current += 1;
+      transcriptRequestVersion.current += 1;
+    };
+  }, [videoId]);
+
+  useEffect(() => {
+    if (
+      contextStatus === "loaded" &&
+      transcriptStatus !== null
+    ) {
+      setTranscriptState({ videoId, status: transcriptStatus });
+      setTranscriptError(null);
+    }
+  }, [contextStatus, transcriptStatus, videoId]);
+
+  useEffect(() => {
     return () => {
       if (savePositionTimeout.current !== null) {
         window.clearTimeout(savePositionTimeout.current);
@@ -1775,6 +2137,18 @@ export default function Sidebar({
   }, []);
 
   const colors = theme === "dark" ? DARK_THEME : LIGHT_THEME;
+  const currentAnalysis =
+    videoAnalysis?.videoId === videoId ? videoAnalysis.analysis : null;
+  const currentAnalysisError =
+    analysisError?.videoId === videoId ? analysisError.message : null;
+  const isAnalyzing = analysisLoadingVideoId === videoId;
+  const currentTranscriptStatus =
+    transcriptState?.videoId === videoId
+      ? transcriptState.status
+      : "NOT_STARTED";
+  const currentTranscriptError =
+    transcriptError?.videoId === videoId ? transcriptError.message : null;
+  const isFetchingTranscript = transcriptLoadingVideoId === videoId;
 
   function updatePosition(nextPosition: Position) {
     const next = clampPosition(
@@ -1911,11 +2285,205 @@ export default function Sidebar({
   }
 
   function handleSaved(savedNote: VideoNote) {
+    setCurrentNotes((current) => [
+      savedNote,
+      ...current.filter((note) => note.id !== savedNote.id),
+    ]);
     setSelectedNote(savedNote);
     setEditingNote(null);
     setViewMode("READER");
+  }
 
-    onNoteCreated?.();
+  async function handleAnalyzeVideo() {
+    if (currentTranscriptStatus !== "READY") {
+      return;
+    }
+
+    const activeVideoId = getActiveYouTubeVideoId();
+    if (!videoId.trim() || activeVideoId !== videoId) {
+      setAnalysisError({
+        videoId,
+        message: "The active YouTube video could not be identified. Try again.",
+      });
+      return;
+    }
+
+    const requestVersion = ++analysisRequestVersion.current;
+    setAnalysisError(null);
+    setAnalysisLoadingVideoId(videoId);
+
+    try {
+      const response = await sendAnalyzeVideo(videoId);
+      if (
+        requestVersion !== analysisRequestVersion.current ||
+        currentVideoIdRef.current !== videoId
+      ) {
+        return;
+      }
+
+      if (response.status === 200 && response.success) {
+        const payload = response.data;
+        if (
+          typeof payload === "object" &&
+          payload !== null &&
+          "analysis" in payload &&
+          isVideoAnalysis(payload.analysis)
+        ) {
+          setVideoAnalysis({
+            videoId,
+            analysis: payload.analysis,
+          });
+          return;
+        }
+
+        setAnalysisError({
+          videoId,
+          message: "The analysis response was invalid.",
+        });
+      } else if (response.status === 409) {
+        setAnalysisError({
+          videoId,
+          message: "A ready transcript is required before analysis.",
+        });
+      } else if (response.status === 502) {
+        setAnalysisError({
+          videoId,
+          message: "Video analysis failed. Please try again later.",
+        });
+      } else {
+        setAnalysisError({
+          videoId,
+          message: "The analysis request failed.",
+        });
+      }
+    } catch {
+      if (
+        requestVersion === analysisRequestVersion.current &&
+        currentVideoIdRef.current === videoId
+      ) {
+        setAnalysisError({
+          videoId,
+          message: "Could not connect to the analysis service.",
+        });
+      }
+    } finally {
+      if (
+        requestVersion === analysisRequestVersion.current &&
+        currentVideoIdRef.current === videoId
+      ) {
+        setAnalysisLoadingVideoId(null);
+      }
+    }
+  }
+
+  async function handleFetchTranscript() {
+    const activeVideoId = getActiveYouTubeVideoId();
+    if (!videoId.trim() || activeVideoId !== videoId) {
+      setTranscriptError({
+        videoId,
+        message: "The active YouTube video could not be identified. Try again.",
+      });
+      return;
+    }
+    if (currentTranscriptStatus === "READY" || isFetchingTranscript) {
+      return;
+    }
+
+    const requestVersion = ++transcriptRequestVersion.current;
+    setTranscriptError(null);
+    setTranscriptState({ videoId, status: "FETCHING" });
+    setTranscriptLoadingVideoId(videoId);
+
+    try {
+      const response = await sendFetchTranscript(videoId);
+      if (
+        requestVersion !== transcriptRequestVersion.current ||
+        currentVideoIdRef.current !== videoId
+      ) {
+        return;
+      }
+
+      if (response.status === 200 && response.success) {
+        setTranscriptState({ videoId, status: "READY" });
+        return;
+      }
+
+      setTranscriptState({ videoId, status: "FAILED" });
+      if (response.status === 404) {
+        setTranscriptError({
+          videoId,
+          message: "Captions or a transcript are unavailable for this video.",
+        });
+      } else if (response.status === 502) {
+        setTranscriptError({
+          videoId,
+          message: "Transcript retrieval failed. Please try again later.",
+        });
+      } else {
+        setTranscriptError({
+          videoId,
+          message: "The transcript request failed.",
+        });
+      }
+    } catch {
+      if (
+        requestVersion === transcriptRequestVersion.current &&
+        currentVideoIdRef.current === videoId
+      ) {
+        setTranscriptState({ videoId, status: "FAILED" });
+        setTranscriptError({
+          videoId,
+          message: "Could not connect to the transcript service.",
+        });
+      }
+    } finally {
+      if (
+        requestVersion === transcriptRequestVersion.current &&
+        currentVideoIdRef.current === videoId
+      ) {
+        setTranscriptLoadingVideoId(null);
+      }
+    }
+  }
+
+  async function handleDelete(note: VideoNote) {
+    if (deletePendingNoteId !== null) {
+      return;
+    }
+
+    if (!window.confirm(`Delete "${note.title || "Untitled note"}"?`)) {
+      return;
+    }
+
+    setDeletePendingNoteId(note.id);
+    setDeleteError(null);
+
+    try {
+      await sendDeleteNote(note.id);
+
+      setCurrentNotes((current) =>
+        current.filter((currentNote) => currentNote.id !== note.id),
+      );
+
+      if (
+        selectedNote?.id === note.id ||
+        editingNote?.id === note.id
+      ) {
+        setSelectedNote(null);
+        setEditingNote(null);
+        setViewMode("LIST");
+      }
+
+      setExplanationState("idle");
+    } catch (deleteFailure) {
+      setDeleteError(
+        deleteFailure instanceof Error
+          ? deleteFailure.message
+          : "Failed to delete note.",
+      );
+    } finally {
+      setDeletePendingNoteId(null);
+    }
   }
 
   function closeSidebar() {
@@ -2195,6 +2763,24 @@ export default function Sidebar({
           background: colors.panel,
         }}
       >
+        {deleteError && (
+          <div
+            role="alert"
+            style={{
+              marginBottom: 12,
+              padding: 10,
+              borderRadius: 8,
+              background: colors.surface,
+              border: `1px solid ${colors.danger}`,
+              color: colors.danger,
+              fontSize: 11,
+              lineHeight: 1.5,
+            }}
+          >
+            {deleteError}
+          </div>
+        )}
+
         {/* LIST */}
         {viewMode === "LIST" && (
           <div>
@@ -2240,7 +2826,7 @@ export default function Sidebar({
                     fontWeight: 800,
                   }}
                 >
-                  {notes.length}
+                  {currentNotes.length}
                 </span>
               </div>
 
@@ -2261,6 +2847,225 @@ export default function Sidebar({
                 + New Note
               </button>
             </div>
+
+            <section
+              aria-label="Transcript"
+              style={{
+                marginBottom: 14,
+                padding: 12,
+                borderRadius: 10,
+                background: colors.surface,
+                border: `1px solid ${colors.border}`,
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  marginBottom: 10,
+                }}
+              >
+                <h2
+                  style={{
+                    margin: 0,
+                    fontSize: 14,
+                    fontWeight: 800,
+                    color: colors.primaryText,
+                  }}
+                >
+                  Transcript
+                </h2>
+                <span
+                  style={{
+                    color:
+                      currentTranscriptStatus === "READY"
+                        ? colors.accent
+                        : colors.muted,
+                    fontSize: 11,
+                    fontWeight: 700,
+                  }}
+                >
+                  {currentTranscriptStatus === "READY"
+                    ? "Ready"
+                    : currentTranscriptStatus === "FETCHING"
+                      ? "Fetching..."
+                      : currentTranscriptStatus === "FAILED"
+                        ? "Failed"
+                        : "Not available"}
+                </span>
+              </div>
+
+              {currentTranscriptError && (
+                <div
+                  role="alert"
+                  style={{
+                    marginBottom: 10,
+                    color: colors.danger,
+                    fontSize: 11,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {currentTranscriptError}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => void handleFetchTranscript()}
+                disabled={isFetchingTranscript || currentTranscriptStatus === "READY"}
+                style={{
+                  width: "100%",
+                  border: "none",
+                  borderRadius: 8,
+                  padding: "9px 12px",
+                  background: colors.accent,
+                  color: theme === "dark" ? "#082f49" : "#ffffff",
+                  fontSize: 11,
+                  fontWeight: 800,
+                  cursor:
+                    isFetchingTranscript || currentTranscriptStatus === "READY"
+                      ? "default"
+                      : "pointer",
+                  opacity:
+                    isFetchingTranscript || currentTranscriptStatus === "READY"
+                      ? 0.65
+                      : 1,
+                }}
+              >
+                {currentTranscriptStatus === "READY"
+                  ? "Transcript Ready"
+                  : isFetchingTranscript
+                    ? "Retrieving Transcript..."
+                    : "Retrieve Transcript"}
+              </button>
+            </section>
+
+            <button
+              type="button"
+              onClick={() => void handleAnalyzeVideo()}
+              disabled={isAnalyzing || currentTranscriptStatus !== "READY"}
+              style={{
+                width: "100%",
+                marginBottom: 14,
+                border: "none",
+                borderRadius: 8,
+                padding: "10px 12px",
+                background: colors.accent,
+                color: theme === "dark" ? "#082f49" : "#ffffff",
+                fontSize: 12,
+                fontWeight: 800,
+                cursor:
+                  isAnalyzing || currentTranscriptStatus !== "READY"
+                    ? "default"
+                    : "pointer",
+                opacity:
+                  isAnalyzing || currentTranscriptStatus !== "READY"
+                    ? 0.65
+                    : 1,
+              }}
+            >
+              {isAnalyzing ? "Analyzing..." : "Analyze Video"}
+            </button>
+
+            {currentAnalysisError && (
+              <div
+                role="alert"
+                style={{
+                  marginBottom: 14,
+                  padding: 10,
+                  borderRadius: 8,
+                  background: colors.surface,
+                  border: `1px solid ${colors.danger}`,
+                  color: colors.danger,
+                  fontSize: 11,
+                  lineHeight: 1.5,
+                }}
+              >
+                {currentAnalysisError}
+              </div>
+            )}
+
+            {currentAnalysis && (
+              <section
+                aria-label="AI Video Analysis"
+                style={{
+                  marginBottom: 18,
+                  padding: 12,
+                  borderRadius: 10,
+                  background: colors.surface,
+                  border: `1px solid ${colors.border}`,
+                }}
+              >
+                <h2
+                  style={{
+                    margin: "0 0 12px",
+                    fontSize: 15,
+                    fontWeight: 800,
+                    color: colors.primaryText,
+                  }}
+                >
+                  AI Video Analysis
+                </h2>
+
+                <AnalysisListSection
+                  title="Summary"
+                  colors={colors}
+                >
+                  <p
+                    style={{
+                      margin: 0,
+                      color: colors.text,
+                      fontSize: 12,
+                      lineHeight: 1.6,
+                      whiteSpace: "pre-wrap",
+                    }}
+                  >
+                    {currentAnalysis.summary}
+                  </p>
+                </AnalysisListSection>
+
+                <AnalysisListSection title="Topics" colors={colors}>
+                  <AnalysisTextList items={currentAnalysis.topics} colors={colors} />
+                </AnalysisListSection>
+
+                <AnalysisListSection title="Concepts" colors={colors}>
+                  <AnalysisTextList
+                    items={currentAnalysis.concepts}
+                    colors={colors}
+                  />
+                </AnalysisListSection>
+
+                <AnalysisListSection title="Key Points" colors={colors}>
+                  {currentAnalysis.key_points.length === 0 ? (
+                    <AnalysisEmptyValue colors={colors} />
+                  ) : (
+                    <ul style={analysisListStyle}>
+                      {currentAnalysis.key_points.map((point, index) => (
+                        <li
+                          key={`${point.start}-${index}`}
+                          style={analysisListItemStyle(colors)}
+                        >
+                          <span style={{ color: colors.accent, fontWeight: 700 }}>
+                            {formatTimestamp(point.start)}
+                          </span>
+                          {" — "}
+                          {point.text}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </AnalysisListSection>
+
+                <AnalysisListSection title="Questions" colors={colors}>
+                  <AnalysisTextList
+                    items={currentAnalysis.questions}
+                    colors={colors}
+                  />
+                </AnalysisListSection>
+              </section>
+            )}
 
             {contextStatus === "loading" ? (
               <div
@@ -2285,7 +3090,7 @@ export default function Sidebar({
               >
                 Could not load notes for this video.
               </div>
-            ) : notes.length === 0 ? (
+            ) : currentNotes.length === 0 ? (
               <div
                 style={{
                   padding: "50px 15px",
@@ -2330,90 +3135,117 @@ export default function Sidebar({
                   gap: 10,
                 }}
               >
-                {notes.map((note) => (
-                  <button
-                    type="button"
+                {currentNotes.map((note) => (
+                  <div
                     key={note.id}
-                    onClick={() => openReader(note)}
                     style={{
-                      width: "100%",
-                      textAlign: "left",
-                      padding: 13,
-                      border: `1px solid ${colors.border}`,
-                      borderRadius: 10,
-                      background: colors.surface,
-                      color: colors.text,
-                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "stretch",
+                      gap: 6,
                     }}
                   >
-                    <div
+                    <button
+                      type="button"
+                      onClick={() => openReader(note)}
                       style={{
-                        display: "flex",
-                        alignItems: "flex-start",
-                        justifyContent: "space-between",
-                        gap: 10,
+                        flex: 1,
+                        minWidth: 0,
+                        textAlign: "left",
+                        padding: 13,
+                        border: `1px solid ${colors.border}`,
+                        borderRadius: 10,
+                        background: colors.surface,
+                        color: colors.text,
+                        cursor: "pointer",
                       }}
                     >
                       <div
                         style={{
-                          minWidth: 0,
-                          flex: 1,
+                          display: "flex",
+                          alignItems: "flex-start",
+                          justifyContent: "space-between",
+                          gap: 10,
                         }}
                       >
                         <div
                           style={{
-                            fontSize: 14,
-                            fontWeight: 800,
-                            lineHeight: 1.35,
-                            color: colors.primaryText,
-                            marginBottom: 7,
+                            minWidth: 0,
+                            flex: 1,
                           }}
                         >
-                          {note.title || "Untitled note"}
-                        </div>
-
-                        <div
-                          style={{
-                            fontSize: 12,
-                            lineHeight: 1.55,
-                            color: colors.muted,
-                            display: "-webkit-box",
-                            WebkitLineClamp: 3,
-                            WebkitBoxOrient: "vertical",
-                            overflow: "hidden",
-                            whiteSpace: "pre-wrap",
-                          }}
-                        >
-                          {note.content ||
-                            documentToPlainText(normalizeDocument(note)) ||
-                            "Empty note"}
-                        </div>
-                      </div>
-
-                      {note.timestamp_seconds !== null &&
-                        note.timestamp_seconds !== undefined && (
-                          <span
-                            onClick={(event) => {
-                              event.stopPropagation();
-
-                              jumpToTimestamp(note.timestamp_seconds!);
-                            }}
+                          <div
                             style={{
-                              flexShrink: 0,
-                              padding: "4px 7px",
-                              borderRadius: 6,
-                              background: colors.accentSoft,
-                              color: colors.accent,
-                              fontSize: 10,
+                              fontSize: 14,
                               fontWeight: 800,
-                              cursor: "pointer",
+                              lineHeight: 1.35,
+                              color: colors.primaryText,
+                              marginBottom: 7,
                             }}
                           >
-                            {formatTimestamp(note.timestamp_seconds)}
-                          </span>
-                        )}
-                    </div>
-                  </button>
+                            {note.title || "Untitled note"}
+                          </div>
+
+                          <div
+                            style={{
+                              fontSize: 12,
+                              lineHeight: 1.55,
+                              color: colors.muted,
+                              display: "-webkit-box",
+                              WebkitLineClamp: 3,
+                              WebkitBoxOrient: "vertical",
+                              overflow: "hidden",
+                              whiteSpace: "pre-wrap",
+                            }}
+                          >
+                            {note.content ||
+                              documentToPlainText(normalizeDocument(note)) ||
+                              "Empty note"}
+                          </div>
+                        </div>
+
+                        {note.timestamp_seconds !== null &&
+                          note.timestamp_seconds !== undefined && (
+                            <span
+                              onClick={(event) => {
+                                event.stopPropagation();
+
+                                jumpToTimestamp(note.timestamp_seconds!);
+                              }}
+                              style={{
+                                flexShrink: 0,
+                                padding: "4px 7px",
+                                borderRadius: 6,
+                                background: colors.accentSoft,
+                                color: colors.accent,
+                                fontSize: 10,
+                                fontWeight: 800,
+                                cursor: "pointer",
+                              }}
+                            >
+                              {formatTimestamp(note.timestamp_seconds)}
+                            </span>
+                          )}
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => void handleDelete(note)}
+                      disabled={deletePendingNoteId !== null}
+                      title={`Delete ${note.title || "note"}`}
+                      aria-label={`Delete ${note.title || "note"}`}
+                      style={{
+                        ...iconButtonStyle,
+                        alignSelf: "center",
+                        flexShrink: 0,
+                        color: colors.danger,
+                        borderColor: colors.border,
+                        opacity: deletePendingNoteId !== null ? 0.55 : 1,
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -2427,6 +3259,8 @@ export default function Sidebar({
             colors={colors}
             onBack={returnToList}
             onEdit={() => openEditor(selectedNote)}
+            onDelete={() => void handleDelete(selectedNote)}
+            isDeleting={deletePendingNoteId === selectedNote.id}
             onGenerateExplanation={() => {
               setExplanationState("loading");
 
@@ -2453,6 +3287,15 @@ export default function Sidebar({
               }
             }}
             onSaved={handleSaved}
+            onDelete={() => {
+              if (editingNote) {
+                void handleDelete(editingNote);
+              }
+            }}
+            isDeleting={
+              editingNote !== null &&
+              deletePendingNoteId === editingNote.id
+            }
           />
         )}
 
