@@ -538,6 +538,179 @@ class KnowledgeRetrievalTests(TestCase):
         self.assertEqual(len(combined_ids), len(set(combined_ids)))
         self.assertCountEqual(combined_ids, [chunk.pk for chunk in chunks])
 
+    def test_combined_prioritizes_relevant_current_video_over_personal_matches(self):
+        def vector_with_similarity(similarity):
+            vector = [0.0] * EMBEDDING_DIMENSION
+            vector[0] = similarity
+            vector[1] = math.sqrt(1 - similarity**2)
+            return vector
+
+        current_video_chunks = [
+            self.create_chunk(
+                content=f"Current video {similarity}",
+                embedding=vector_with_similarity(similarity),
+                video=self.video_one,
+                source_type=KnowledgeChunk.SourceType.VIDEO_TRANSCRIPT,
+                content_type=KnowledgeChunk.ContentType.TRANSCRIPT_CHUNK,
+            )
+            for similarity in (0.8, 0.7)
+        ]
+        personal_chunks = [
+            self.create_chunk(
+                content=f"Personal match {index}",
+                embedding=axis_vector(0),
+            )
+            for index in range(5)
+        ]
+
+        results = retrieve_scoped_knowledge(
+            RetrievalRequest(
+                user=self.user,
+                query="video question",
+                scope=RetrievalScope.COMBINED,
+                video=self.video_one,
+                top_k=5,
+            )
+        )
+
+        result_ids = [result.chunk.pk for result in results]
+        self.assertEqual(
+            result_ids[:2],
+            [chunk.pk for chunk in current_video_chunks],
+        )
+        self.assertEqual(
+            result_ids[2:],
+            [chunk.pk for chunk in personal_chunks[:3]],
+        )
+
+    def test_combined_current_video_pool_includes_all_supported_sources(self):
+        video_chunks = [
+            self.create_chunk(
+                content="Video note",
+                embedding=axis_vector(0),
+                video=self.video_one,
+                source_type=KnowledgeChunk.SourceType.NOTE,
+            ),
+            self.create_chunk(
+                content="Video transcript",
+                embedding=axis_vector(0),
+                video=self.video_one,
+                source_type=KnowledgeChunk.SourceType.VIDEO_TRANSCRIPT,
+                content_type=KnowledgeChunk.ContentType.TRANSCRIPT_CHUNK,
+            ),
+            self.create_chunk(
+                content="Video analysis",
+                embedding=axis_vector(0),
+                video=self.video_one,
+                source_type=KnowledgeChunk.SourceType.VIDEO_ANALYSIS,
+                content_type=KnowledgeChunk.ContentType.ANALYSIS_CHUNK,
+            ),
+        ]
+
+        results = retrieve_scoped_knowledge(
+            RetrievalRequest(
+                user=self.user,
+                query="video question",
+                scope=RetrievalScope.COMBINED,
+                video=self.video_one,
+                top_k=3,
+            )
+        )
+
+        self.assertCountEqual(
+            [result.chunk.pk for result in results],
+            [chunk.pk for chunk in video_chunks],
+        )
+        self.assertCountEqual(
+            [result.chunk.source_type for result in results],
+            [
+                KnowledgeChunk.SourceType.NOTE,
+                KnowledgeChunk.SourceType.VIDEO_TRANSCRIPT,
+                KnowledgeChunk.SourceType.VIDEO_ANALYSIS,
+            ],
+        )
+
+    def test_combined_fills_video_results_with_relevant_personal_knowledge(self):
+        video_chunk = self.create_chunk(
+            content="Current video result",
+            embedding=axis_vector(0),
+            video=self.video_one,
+            source_type=KnowledgeChunk.SourceType.VIDEO_ANALYSIS,
+            content_type=KnowledgeChunk.ContentType.ANALYSIS_CHUNK,
+        )
+        personal_chunks = [
+            self.create_chunk(
+                content=f"Personal result {index}",
+                embedding=axis_vector(0),
+            )
+            for index in range(4)
+        ]
+
+        results = retrieve_scoped_knowledge(
+            RetrievalRequest(
+                user=self.user,
+                query="video question",
+                scope=RetrievalScope.COMBINED,
+                video=self.video_one,
+                top_k=4,
+            )
+        )
+
+        self.assertEqual(
+            [result.chunk.pk for result in results],
+            [video_chunk.pk, *(chunk.pk for chunk in personal_chunks[:3])],
+        )
+
+    def test_combined_deduplicates_chunks_in_video_and_personal_pools(self):
+        shared_chunk = self.create_chunk(
+            content="Current video note",
+            embedding=axis_vector(0),
+            video=self.video_one,
+        )
+        personal_chunk = self.create_chunk(
+            content="Personal note",
+            embedding=axis_vector(0),
+        )
+
+        results = retrieve_scoped_knowledge(
+            RetrievalRequest(
+                user=self.user,
+                query="video question",
+                scope=RetrievalScope.COMBINED,
+                video=self.video_one,
+                top_k=3,
+            )
+        )
+
+        result_ids = [result.chunk.pk for result in results]
+        self.assertEqual(result_ids, [shared_chunk.pk, personal_chunk.pk])
+        self.assertEqual(len(result_ids), len(set(result_ids)))
+
+    def test_combined_without_video_results_returns_personal_knowledge(self):
+        personal_chunks = [
+            self.create_chunk(
+                content=f"Personal result {index}",
+                embedding=axis_vector(0),
+                video=self.video_two,
+            )
+            for index in range(3)
+        ]
+
+        results = retrieve_scoped_knowledge(
+            RetrievalRequest(
+                user=self.user,
+                query="video question",
+                scope=RetrievalScope.COMBINED,
+                video=self.video_one,
+                top_k=3,
+            )
+        )
+
+        self.assertEqual(
+            [result.chunk.pk for result in results],
+            [chunk.pk for chunk in personal_chunks],
+        )
+
     def test_combined_context_combinations_deduplicate_and_isolate_users(self):
         video_note = self.create_chunk(
             embedding=axis_vector(0),

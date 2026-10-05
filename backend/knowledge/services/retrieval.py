@@ -29,8 +29,8 @@ class RetrievalScope(StrEnum):
     """Candidate-source scopes supported by knowledge retrieval.
 
     CURRENT_VIDEO and CURRENT_FOLDER require their corresponding context.
-    PERSONAL_KB ignores optional video and folder context. COMBINED ranks the
-    contextual video/folder candidates together with remaining personal items.
+    PERSONAL_KB ignores optional video and folder context. COMBINED prioritizes
+    current-video candidates before personal knowledge when a video is supplied.
     """
 
     CURRENT_VIDEO = "current_video"
@@ -234,7 +234,9 @@ def retrieve_scoped_knowledge(
 
     CURRENT_VIDEO and CURRENT_FOLDER restrict candidates to their exact
     context. PERSONAL_KB ignores optional video/folder fields. COMBINED
-    combines contextual candidates with remaining personal knowledge.
+    prioritizes current-video results, then fills remaining slots from
+    personal knowledge when a video is supplied. Without a video, its existing
+    optional-folder behavior is preserved.
     """
     if not isinstance(request, RetrievalRequest):
         raise KnowledgeRetrievalError(
@@ -285,16 +287,31 @@ def retrieve_scoped_knowledge(
     normalized_query = _validate_query(request.query)
     _validate_top_k(request.top_k)
     query_vector = _get_query_vector(normalized_query)
+    if request.video is not None:
+        video_results = _rank_chunks(
+            _video_chunks(user=request.user, video=request.video),
+            query_vector,
+            request.top_k,
+        )
+        personal_candidates = KnowledgeChunk.objects.filter(
+            user=request.user,
+            embedding__isnull=False,
+        )
+        # At most len(video_results) top personal matches can overlap these.
+        personal_results = _rank_chunks(
+            personal_candidates,
+            query_vector,
+            request.top_k + len(video_results),
+        )
+        candidate_results = {
+            result.chunk.pk: result for result in video_results
+        }
+        for result in personal_results:
+            candidate_results.setdefault(result.chunk.pk, result)
+        return list(candidate_results.values())[: request.top_k]
+
     candidate_results = {}
     candidate_sets = []
-    if request.video is not None:
-        candidate_sets.append(
-            _rank_chunks(
-                _video_chunks(user=request.user, video=request.video),
-                query_vector,
-                request.top_k,
-            )
-        )
     if request.folder is not None:
         candidate_sets.append(
             _rank_chunks(

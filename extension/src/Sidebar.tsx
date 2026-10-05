@@ -1932,12 +1932,22 @@ function NoteWriter({
 interface AIWorkspaceProps {
   colors: ThemeColors;
   videoId: string;
+  videoTitle: string;
+  videoDatabaseId: number | null;
+  notes: VideoNote[];
 }
 
-function AIWorkspace({ colors, videoId }: AIWorkspaceProps) {
+function AIWorkspace({
+  colors,
+  videoId,
+  videoTitle,
+  videoDatabaseId,
+  notes,
+}: AIWorkspaceProps) {
   const [question, setQuestion] = useState("");
   const [scope, setScope] = useState<AskRAGScope>("CURRENT_VIDEO");
   const [answer, setAnswer] = useState<RAGAnswer | null>(null);
+  const [answeredScope, setAnsweredScope] = useState<AskRAGScope | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const requestInProgress = useRef(false);
@@ -1966,6 +1976,7 @@ function AIWorkspace({ colors, videoId }: AIWorkspaceProps) {
     requestInProgress.current = true;
     const currentRequestVersion = ++requestVersion.current;
     setAnswer(null);
+    setAnsweredScope(null);
     setError(null);
     setIsLoading(true);
 
@@ -1996,6 +2007,7 @@ function AIWorkspace({ colors, videoId }: AIWorkspaceProps) {
       }
 
       setAnswer(response.data);
+      setAnsweredScope(scope);
     } catch {
       if (
         mounted.current &&
@@ -2199,6 +2211,22 @@ function AIWorkspace({ colors, videoId }: AIWorkspaceProps) {
                 borderTop: `1px solid ${colors.border}`,
               }}
             >
+              <div
+                style={{
+                  marginBottom: 8,
+                  color: colors.muted,
+                  fontSize: 10,
+                  fontWeight: 700,
+                }}
+              >
+                {answeredScope === "CURRENT_VIDEO"
+                  ? "This Video"
+                  : answeredScope === "PERSONAL_KB"
+                    ? "My Knowledge"
+                    : "Everything"}{" "}
+                · {answer.sources.length}{" "}
+                {answer.sources.length === 1 ? "source" : "sources"}
+              </div>
               <h4
                 style={{
                   margin: "0 0 6px",
@@ -2212,22 +2240,77 @@ function AIWorkspace({ colors, videoId }: AIWorkspaceProps) {
                 Sources
               </h4>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {answer.sources.map((source, index) => (
-                  <div
-                    key={`${source.chunk_id}-${index}`}
-                    style={{
-                      padding: "7px 8px",
-                      borderRadius: 7,
-                      background: colors.panel,
-                      color: colors.muted,
-                      fontSize: 11,
-                      lineHeight: 1.5,
-                      whiteSpace: "pre-wrap",
-                    }}
-                  >
-                    {source.content}
-                  </div>
-                ))}
+                {answer.sources.map((source, index) => {
+                  const sourceType = source.metadata.source_type;
+                  const isNote =
+                    source.note_id !== null || sourceType === "NOTE";
+                  const sourceLabel = isNote
+                    ? "Note"
+                    : sourceType === "VIDEO_TRANSCRIPT"
+                      ? "Video Transcript"
+                      : sourceType === "VIDEO_ANALYSIS"
+                        ? "Video Analysis"
+                        : source.video_id !== null
+                          ? "Video source"
+                          : "Source";
+                  const noteTitle = isNote
+                    ? notes.find((note) => note.id === source.note_id)?.title
+                    : null;
+                  const videoLabel =
+                    !isNote &&
+                    source.video_id !== null &&
+                    source.video_id === videoDatabaseId &&
+                    videoTitle.trim()
+                      ? videoTitle
+                      : !isNote && source.video_id !== null
+                        ? "Video source"
+                        : null;
+                  const SourceIcon = isNote
+                    ? FileText
+                    : sourceType === "VIDEO_TRANSCRIPT"
+                      ? BookOpen
+                      : sourceType === "VIDEO_ANALYSIS"
+                        ? Brain
+                        : FileText;
+
+                  return (
+                    <div
+                      key={`${source.chunk_id}-${index}`}
+                      style={{
+                        padding: "7px 8px",
+                        borderRadius: 7,
+                        background: colors.panel,
+                        color: colors.muted,
+                        fontSize: 11,
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 5,
+                          marginBottom: 4,
+                          color: colors.text,
+                          fontSize: 10,
+                          fontWeight: 700,
+                        }}
+                      >
+                        <SourceIcon size={12} aria-hidden="true" />
+                        <span>{sourceLabel}</span>
+                        {(noteTitle || videoLabel) && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span>{noteTitle || videoLabel}</span>
+                          </>
+                        )}
+                      </div>
+                      <div style={{ whiteSpace: "pre-wrap" }}>
+                        {source.content}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -3897,7 +3980,17 @@ export default function Sidebar({
 
         {/* AI */}
         {activeWorkspace === "NOTES" && viewMode === "AI" && selectedNote && (
-          <AIWorkspace colors={colors} videoId={videoId} />
+          <AIWorkspace
+            colors={colors}
+            videoId={videoId}
+            videoTitle={videoTitle}
+            videoDatabaseId={
+              currentAnalysis?.video ??
+              currentNotes.find((note) => note.video != null)?.video ??
+              null
+            }
+            notes={currentNotes}
+          />
         )}
       </div>
       {currentTranscriptStatus === "READY" && (
