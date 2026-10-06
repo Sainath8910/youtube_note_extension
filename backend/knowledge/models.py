@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 from django.conf import settings
 from django.db import models
 from pgvector.django import VectorField
@@ -93,3 +95,28 @@ class KnowledgeChunk(models.Model):
 
     def __str__(self):
         return f"{self.get_content_type_display()} chunk for {self.user}"
+
+class PreviousContextJobStatus(models.TextChoices):
+    PENDING = "PENDING", "Pending"
+    PROCESSING = "PROCESSING", "Processing"
+    READY = "READY", "Ready"
+    FAILED = "FAILED", "Failed"
+
+class PreviousContextJob(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    youtube_id = models.CharField(max_length=255)
+    video = models.ForeignKey("videos.Video", on_delete=models.SET_NULL, null=True, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=PreviousContextJobStatus.choices,
+        default=PreviousContextJobStatus.PENDING
+    )
+    result = models.JSONField(null=True, blank=True)
+    error = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def job_id(self) -> str:
+        return str(self.id)

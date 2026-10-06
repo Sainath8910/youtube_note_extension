@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useCallback,
   useRef,
   useState,
   type CSSProperties,
@@ -35,8 +36,11 @@ import {
 } from "lucide-react";
 import { getActiveYouTubeVideoId } from "./youtubeMetadata";
 import {
+  isPreviousContextData,
+  sendPreviousContext,
   sendAskRAG,
   type AskRAGScope,
+  type PreviousContextData,
   type RAGAnswer,
   type RAGSource,
 } from "./ragApi";
@@ -104,6 +108,15 @@ interface SidebarProps {
   persistedAnalysis: VideoAnalysis | null;
   transcriptStatus: TranscriptStatus | null;
 }
+
+type PreviousContextLoadState =
+  | { videoId: string; status: "loading" }
+  | { videoId: string; status: "error" }
+  | {
+      videoId: string;
+      status: "loaded";
+      data: PreviousContextData | null;
+    };
 
 type ViewMode = "LIST" | "READER" | "WRITER" | "AI";
 
@@ -2646,6 +2659,11 @@ export default function Sidebar({
   const [viewMode, setViewMode] = useState<ViewMode>("LIST");
 
   const [currentNotes, setCurrentNotes] = useState(notes);
+  const [previousContextState, setPreviousContextState] =
+    useState<PreviousContextLoadState>({
+      videoId,
+      status: "loading",
+    });
 
   const [videoAnalysis, setVideoAnalysis] = useState<{
     videoId: string;
@@ -2676,6 +2694,10 @@ export default function Sidebar({
   } | null>(null);
 
   const [selectedNote, setSelectedNote] = useState<VideoNote | null>(null);
+
+  const [expandedConcepts, setExpandedConcepts] = useState<Record<string, boolean>>(
+    {},
+  );
 
   const [editingNote, setEditingNote] = useState<VideoNote | null>(null);
 
@@ -2712,8 +2734,62 @@ export default function Sidebar({
 
   const analysisRequestVersion = useRef(0);
   const transcriptRequestVersion = useRef(0);
+  const previousContextRequestVersion = useRef(0);
+  const previousContextAbortController = useRef<AbortController | null>(null);
   const currentVideoIdRef = useRef(videoId);
   currentVideoIdRef.current = videoId;
+
+  const loadPreviousContext = useCallback(async () => {
+    previousContextAbortController.current?.abort();
+    const abortController = new AbortController();
+    previousContextAbortController.current = abortController;
+    const requestVersion = ++previousContextRequestVersion.current;
+    setPreviousContextState({ videoId, status: "loading" });
+
+    try {
+      const response = await sendPreviousContext(videoId, abortController.signal);
+      if (
+        requestVersion !== previousContextRequestVersion.current ||
+        currentVideoIdRef.current !== videoId ||
+        abortController.signal.aborted ||
+        getActiveYouTubeVideoId() !== videoId
+      ) {
+        return;
+      }
+
+      if (response.status === 404) {
+        setPreviousContextState({
+          videoId,
+          status: "loaded",
+          data: null,
+        });
+        return;
+      }
+      if (!response.success || !isPreviousContextData(response.data)) {
+        setPreviousContextState({ videoId, status: "error" });
+        return;
+      }
+      if (response.data.video.youtube_id !== videoId) {
+        setPreviousContextState({ videoId, status: "error" });
+        return;
+      }
+
+      setPreviousContextState({
+        videoId,
+        status: "loaded",
+        data: response.data,
+      });
+    } catch {
+      if (
+        requestVersion === previousContextRequestVersion.current &&
+        currentVideoIdRef.current === videoId &&
+        !abortController.signal.aborted &&
+        getActiveYouTubeVideoId() === videoId
+      ) {
+        setPreviousContextState({ videoId, status: "error" });
+      }
+    }
+  }, [videoId]);
 
   useEffect(() => {
     let mounted = true;
@@ -2738,6 +2814,21 @@ export default function Sidebar({
   useEffect(() => {
     setCurrentNotes(notes);
   }, [notes]);
+
+  useEffect(() => {
+    let scheduled = true;
+    queueMicrotask(() => {
+      if (scheduled) {
+        void loadPreviousContext();
+      }
+    });
+    return () => {
+      scheduled = false;
+      previousContextRequestVersion.current += 1;
+      previousContextAbortController.current?.abort();
+      previousContextAbortController.current = null;
+    };
+  }, [loadPreviousContext]);
 
   useEffect(() => {
     analysisRequestVersion.current += 1;
@@ -2789,6 +2880,17 @@ export default function Sidebar({
   }, []);
 
   const colors = theme === "dark" ? DARK_THEME : LIGHT_THEME;
+  const previousContextStatus =
+    previousContextState.videoId === videoId
+      ? previousContextState.status
+      : "loading";
+  const previousContext =
+    previousContextState.videoId === videoId &&
+    previousContextState.status === "loaded"
+      ? previousContextState.data
+      : null;
+  const prerequisiteConcepts = previousContext?.concepts.prerequisites ?? [];
+  const upcomingConcepts = previousContext?.concepts.upcoming ?? [];
   const persistedCurrentAnalysis =
     contextStatus === "loaded" &&
     persistedAnalysis !== null &&
@@ -3503,70 +3605,939 @@ export default function Sidebar({
         {/* LIST */}
         {activeWorkspace === "NOTES" && viewMode === "LIST" && (
           <div>
-            {contextStatus === "loaded" && currentNotes.length > 0 && (
-              <section
-                aria-label="My Previous Context"
+            <section
+              aria-label="My Previous Context"
+              style={{
+                marginBottom: 14,
+                padding: 11,
+                borderRadius: 10,
+                background: colors.surface,
+                border: `1px solid ${colors.border}`,
+              }}
+            >
+              <h2
                 style={{
-                  marginBottom: 14,
-                  padding: 11,
-                  borderRadius: 10,
-                  background: colors.surface,
-                  border: `1px solid ${colors.border}`,
+                  margin: "0 0 8px",
+                  fontSize: 12,
+                  fontWeight: 800,
+                  color: colors.primaryText,
                 }}
               >
-                <h2
+                My Previous Context
+              </h2>
+
+              {previousContextStatus === "loading" ? (
+                <div
+                  role="status"
+                  style={{ color: colors.muted, fontSize: 11 }}
+                >
+                  Loading previous context...
+                </div>
+              ) : previousContextStatus === "error" ? (
+                <div
+                  role="alert"
                   style={{
-                    margin: "0 0 8px",
-                    fontSize: 12,
-                    fontWeight: 800,
-                    color: colors.primaryText,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    color: colors.danger,
+                    fontSize: 11,
                   }}
                 >
-                  My Previous Context
-                </h2>
-                <div style={{ display: "grid", gap: 5 }}>
-                  {currentNotes.map((note) => (
-                    <button
-                      key={note.id}
-                      type="button"
-                      onClick={() => openReader(note)}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 7,
-                        width: "100%",
-                        minWidth: 0,
-                        padding: "6px 7px",
-                        border: "none",
-                        borderRadius: 6,
-                        background: "transparent",
-                        color: colors.text,
-                        textAlign: "left",
-                        fontSize: 11,
-                        lineHeight: 1.4,
-                        cursor: "pointer",
-                      }}
-                    >
-                      <FileText
-                        size={13}
-                        aria-hidden="true"
-                        style={{ flexShrink: 0, color: colors.muted }}
-                      />
-                      <span
+                  <span>Could not load previous context.</span>
+                  <button
+                    type="button"
+                    onClick={() => void loadPreviousContext()}
+                    style={{
+                      border: "none",
+                      background: "transparent",
+                      color: colors.accent,
+                      fontSize: 11,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {previousContext?.exact.length ? (
+                    <div style={{ marginBottom: 10 }}>
+                      <h3
                         style={{
-                          minWidth: 0,
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
+                          margin: "0 0 5px",
+                          color: colors.muted,
+                          fontSize: 10,
+                          fontWeight: 800,
                         }}
                       >
-                        {note.title || "Untitled note"}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            )}
+                        Notes from this video
+                      </h3>
+                      <div style={{ display: "grid", gap: 5 }}>
+                        {previousContext.exact.map((item) => {
+                          const note = currentNotes.find(
+                            (currentNote) => currentNote.id === item.note_id,
+                          );
+                          const preview = item.content
+                            .replace(/\s+/g, " ")
+                            .trim();
+                          const contentPreview =
+                            preview.length > 140
+                              ? `${preview.slice(0, 137)}...`
+                              : preview;
+                          const itemStyle = {
+                            display: "flex",
+                            flexDirection: "column" as const,
+                            alignItems: "flex-start",
+                            gap: 3,
+                            width: "100%",
+                            minWidth: 0,
+                            padding: "6px 7px",
+                            border: "none",
+                            borderRadius: 6,
+                            background: "transparent",
+                            color: colors.text,
+                            textAlign: "left" as const,
+                            fontSize: 11,
+                            lineHeight: 1.4,
+                          };
+                          const content = (
+                            <>
+                              <span
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 6,
+                                  fontWeight: 700,
+                                }}
+                              >
+                                <FileText
+                                  size={13}
+                                  aria-hidden="true"
+                                  style={{
+                                    flexShrink: 0,
+                                    color: colors.muted,
+                                  }}
+                                />
+                                {item.title || "Untitled note"}
+                              </span>
+                              {contentPreview && (
+                                <span
+                                  style={{
+                                    display: "-webkit-box",
+                                    overflow: "hidden",
+                                    color: colors.muted,
+                                    fontSize: 10,
+                                    WebkitBoxOrient: "vertical",
+                                    WebkitLineClamp: 2,
+                                  }}
+                                >
+                                  {contentPreview}
+                                </span>
+                              )}
+                            </>
+                          );
+
+                          return note ? (
+                            <button
+                              key={item.note_id}
+                              type="button"
+                              onClick={() => openReader(note)}
+                              title={item.title || "Untitled note"}
+                              style={{
+                                ...itemStyle,
+                                cursor: "pointer",
+                              }}
+                            >
+                              {content}
+                            </button>
+                          ) : (
+                            <div key={item.note_id} style={itemStyle}>
+                              {content}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {previousContext?.related.length ? (
+                    <div style={{ marginBottom: 10 }}>
+                      <h3
+                        style={{
+                          margin: "0 0 5px",
+                          color: colors.muted,
+                          fontSize: 10,
+                          fontWeight: 800,
+                        }}
+                      >
+                        Related knowledge
+                      </h3>
+                      <div style={{ display: "grid", gap: 5 }}>
+                        {previousContext.related.map((item) => {
+                          const preview = item.content
+                            .replace(/\s+/g, " ")
+                            .trim();
+                          return (
+                            <div
+                              key={item.chunk_id}
+                              style={{
+                                padding: "6px 7px",
+                                borderRadius: 6,
+                                background: colors.panel,
+                                color: colors.text,
+                                fontSize: 11,
+                                lineHeight: 1.4,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 6,
+                                  marginBottom: 3,
+                                  fontWeight: 700,
+                                }}
+                              >
+                                <BookOpen
+                                  size={12}
+                                  aria-hidden="true"
+                                  style={{ color: colors.muted }}
+                                />
+                                {item.title || "Related note"}
+                              </div>
+                              <div
+                                style={{
+                                  display: "-webkit-box",
+                                  overflow: "hidden",
+                                  color: colors.muted,
+                                  fontSize: 10,
+                                  WebkitBoxOrient: "vertical",
+                                  WebkitLineClamp: 2,
+                                }}
+                              >
+                                {preview}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {(prerequisiteConcepts.length > 0 || upcomingConcepts.length > 0) && (
+                    <div style={{ marginBottom: 12 }}>
+                      <h3
+                        style={{
+                          margin: "0 0 6px",
+                          color: colors.muted,
+                          fontSize: 10,
+                          fontWeight: 800,
+                        }}
+                      >
+                        Concept Context
+                      </h3>
+
+                      {prerequisiteConcepts.length > 0 && (
+                        <div style={{ marginBottom: 8 }}>
+                          <h4
+                            style={{
+                              margin: "0 0 5px",
+                              color: colors.muted,
+                              fontSize: 9,
+                              fontWeight: 800,
+                              textTransform: "uppercase",
+                              letterSpacing: 0.5,
+                            }}
+                          >
+                            Prerequisites
+                          </h4>
+                          <div style={{ display: "grid", gap: 6 }}>
+                            {prerequisiteConcepts.map((concept) => {
+                              const conceptKey = `${concept.type}-${concept.name}`;
+                              const isExpanded = Boolean(expandedConcepts[conceptKey]);
+                              const hasReason =
+                                typeof concept.reason === "string" &&
+                                concept.reason.trim().length > 0;
+                              const hasEvidence =
+                                typeof concept.evidence === "string" &&
+                                concept.evidence.trim().length > 0;
+                              const hasTimestamps = concept.timestamps.length > 0;
+                              const hasPersonalNotes = concept.personal_notes.length > 0;
+                              const showDetails =
+                                hasReason || hasEvidence || hasTimestamps || hasPersonalNotes;
+
+                              return (
+                                <div
+                                  key={conceptKey}
+                                  style={{
+                                    padding: "7px 8px",
+                                    borderRadius: 8,
+                                    background: colors.panel,
+                                    border: `1px solid ${colors.border}`,
+                                  }}
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setExpandedConcepts((current) => ({
+                                        ...current,
+                                        [conceptKey]: !current[conceptKey],
+                                      }))
+                                    }
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "space-between",
+                                      width: "100%",
+                                      gap: 8,
+                                      background: "transparent",
+                                      border: "none",
+                                      padding: 0,
+                                      color: colors.text,
+                                      textAlign: "left",
+                                      cursor: "pointer",
+                                      font: "inherit",
+                                    }}
+                                  >
+                                    <div style={{ minWidth: 0 }}>
+                                      <div
+                                        style={{
+                                          color: colors.primaryText,
+                                          fontSize: 11,
+                                          fontWeight: 800,
+                                          lineHeight: 1.4,
+                                        }}
+                                      >
+                                        {concept.name}
+                                      </div>
+                                      <div
+                                        style={{
+                                          display: "flex",
+                                          flexWrap: "wrap",
+                                          gap: 5,
+                                          marginTop: 3,
+                                          color: colors.muted,
+                                          fontSize: 9,
+                                        }}
+                                      >
+                                        <span
+                                          style={{
+                                            padding: "2px 5px",
+                                            borderRadius: 999,
+                                            background: colors.accentSoft,
+                                            color: colors.accent,
+                                            fontWeight: 700,
+                                          }}
+                                        >
+                                          {concept.has_previous_knowledge
+                                            ? "You know this"
+                                            : "Needs review"}
+                                        </span>
+                                        {concept.related_count > 0 && (
+                                          <span>
+                                            {concept.related_count} related note
+                                            {concept.related_count === 1 ? "" : "s"}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                    {showDetails && (
+                                      isExpanded ? (
+                                        <ChevronDown size={13} aria-hidden="true" />
+                                      ) : (
+                                        <ChevronRight size={13} aria-hidden="true" />
+                                      )
+                                    )}
+                                  </button>
+
+                                  {isExpanded && showDetails && (
+                                    <div
+                                      style={{
+                                        display: "flex",
+                                        flexDirection: "column",
+                                        gap: 8,
+                                        marginTop: 8,
+                                      }}
+                                    >
+                                      {hasReason && (
+                                        <div>
+                                          <div
+                                            style={{
+                                              color: colors.muted,
+                                              fontSize: 9,
+                                              fontWeight: 800,
+                                              textTransform: "uppercase",
+                                              letterSpacing: 0.5,
+                                              marginBottom: 3,
+                                            }}
+                                          >
+                                            Reason
+                                          </div>
+                                          <div
+                                            style={{
+                                              color: colors.text,
+                                              fontSize: 11,
+                                              lineHeight: 1.5,
+                                              whiteSpace: "pre-wrap",
+                                            }}
+                                          >
+                                            {concept.reason}
+                                          </div>
+                                        </div>
+                                      )}
+
+                                      {hasEvidence && (
+                                        <div>
+                                          <div
+                                            style={{
+                                              color: colors.muted,
+                                              fontSize: 9,
+                                              fontWeight: 800,
+                                              textTransform: "uppercase",
+                                              letterSpacing: 0.5,
+                                              marginBottom: 3,
+                                            }}
+                                          >
+                                            Evidence
+                                          </div>
+                                          <div
+                                            style={{
+                                              color: colors.text,
+                                              fontSize: 11,
+                                              lineHeight: 1.5,
+                                              whiteSpace: "pre-wrap",
+                                            }}
+                                          >
+                                            {concept.evidence}
+                                          </div>
+                                        </div>
+                                      )}
+
+                                      {hasTimestamps && (
+                                        <div>
+                                          <div
+                                            style={{
+                                              color: colors.muted,
+                                              fontSize: 9,
+                                              fontWeight: 800,
+                                              textTransform: "uppercase",
+                                              letterSpacing: 0.5,
+                                              marginBottom: 3,
+                                            }}
+                                          >
+                                            Timestamps
+                                          </div>
+                                          <div style={{ display: "grid", gap: 4 }}>
+                                            {concept.timestamps.map((timestamp, index) => (
+                                              <button
+                                                key={`${concept.name}-${timestamp.seconds}-${index}`}
+                                                type="button"
+                                                onClick={() => jumpToTimestamp(timestamp.seconds)}
+                                                style={{
+                                                  display: "inline-flex",
+                                                  alignItems: "center",
+                                                  gap: 5,
+                                                  width: "fit-content",
+                                                  padding: "3px 6px",
+                                                  borderRadius: 6,
+                                                  border: `1px solid ${colors.border}`,
+                                                  background: colors.surface,
+                                                  color: colors.accent,
+                                                  fontSize: 10,
+                                                  fontWeight: 700,
+                                                  cursor: "pointer",
+                                                }}
+                                              >
+                                                <Play size={10} aria-hidden="true" />
+                                                {formatTimestamp(timestamp.seconds)}
+                                              </button>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )}
+
+                                      {hasPersonalNotes && (
+                                        <div>
+                                          <div
+                                            style={{
+                                              color: colors.muted,
+                                              fontSize: 9,
+                                              fontWeight: 800,
+                                              textTransform: "uppercase",
+                                              letterSpacing: 0.5,
+                                              marginBottom: 3,
+                                            }}
+                                          >
+                                            Personal Notes
+                                          </div>
+                                          <div style={{ display: "grid", gap: 5 }}>
+                                            {concept.personal_notes.map((item) => {
+                                              const note = currentNotes.find(
+                                                (currentNote) => currentNote.id === item.note_id,
+                                              );
+                                              const preview = item.content
+                                                .replace(/\s+/g, " ")
+                                                .trim();
+                                              const contentPreview =
+                                                preview.length > 120
+                                                  ? `${preview.slice(0, 117)}...`
+                                                  : preview;
+                                              const content = (
+                                                <>
+                                                  <span
+                                                    style={{
+                                                      display: "flex",
+                                                      alignItems: "center",
+                                                      gap: 6,
+                                                      fontWeight: 700,
+                                                    }}
+                                                  >
+                                                    <FileText
+                                                      size={11}
+                                                      aria-hidden="true"
+                                                      style={{ color: colors.muted }}
+                                                    />
+                                                    {item.title || "Related note"}
+                                                  </span>
+                                                  {contentPreview && (
+                                                    <span
+                                                      style={{
+                                                        display: "-webkit-box",
+                                                        overflow: "hidden",
+                                                        color: colors.muted,
+                                                        fontSize: 10,
+                                                        WebkitBoxOrient: "vertical",
+                                                        WebkitLineClamp: 2,
+                                                      }}
+                                                    >
+                                                      {contentPreview}
+                                                    </span>
+                                                  )}
+                                                </>
+                                              );
+
+                                              return note ? (
+                                                <button
+                                                  key={`${item.note_id}-${item.chunk_id}`}
+                                                  type="button"
+                                                  onClick={() => openReader(note)}
+                                                  title={item.title || "Related note"}
+                                                  style={{
+                                                    display: "flex",
+                                                    flexDirection: "column",
+                                                    alignItems: "flex-start",
+                                                    gap: 3,
+                                                    width: "100%",
+                                                    minWidth: 0,
+                                                    padding: "5px 6px",
+                                                    border: "none",
+                                                    borderRadius: 6,
+                                                    background: "transparent",
+                                                    color: colors.text,
+                                                    textAlign: "left",
+                                                    cursor: "pointer",
+                                                    fontSize: 10,
+                                                    lineHeight: 1.4,
+                                                  }}
+                                                >
+                                                  {content}
+                                                </button>
+                                              ) : (
+                                                <div
+                                                  key={`${item.note_id}-${item.chunk_id}`}
+                                                  style={{
+                                                    display: "flex",
+                                                    flexDirection: "column",
+                                                    alignItems: "flex-start",
+                                                    gap: 3,
+                                                    width: "100%",
+                                                    minWidth: 0,
+                                                    padding: "5px 6px",
+                                                    borderRadius: 6,
+                                                    background: colors.surface,
+                                                    color: colors.text,
+                                                    fontSize: 10,
+                                                    lineHeight: 1.4,
+                                                  }}
+                                                >
+                                                  {content}
+                                                </div>
+                                              );
+                                            })}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {upcomingConcepts.length > 0 && (
+                        <div>
+                          <h4
+                            style={{
+                              margin: "0 0 5px",
+                              color: colors.muted,
+                              fontSize: 9,
+                              fontWeight: 800,
+                              textTransform: "uppercase",
+                              letterSpacing: 0.5,
+                            }}
+                          >
+                            Upcoming
+                          </h4>
+                          <div style={{ display: "grid", gap: 6 }}>
+                            {upcomingConcepts.map((concept) => {
+                              const conceptKey = `${concept.type}-${concept.name}`;
+                              const isExpanded = Boolean(expandedConcepts[conceptKey]);
+                              const hasReason =
+                                typeof concept.reason === "string" &&
+                                concept.reason.trim().length > 0;
+                              const hasEvidence =
+                                typeof concept.evidence === "string" &&
+                                concept.evidence.trim().length > 0;
+                              const hasTimestamps = concept.timestamps.length > 0;
+                              const hasPersonalNotes = concept.personal_notes.length > 0;
+                              const showDetails =
+                                hasReason || hasEvidence || hasTimestamps || hasPersonalNotes;
+
+                              return (
+                                <div
+                                  key={conceptKey}
+                                  style={{
+                                    padding: "7px 8px",
+                                    borderRadius: 8,
+                                    background: colors.panel,
+                                    border: `1px solid ${colors.border}`,
+                                  }}
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setExpandedConcepts((current) => ({
+                                        ...current,
+                                        [conceptKey]: !current[conceptKey],
+                                      }))
+                                    }
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "space-between",
+                                      width: "100%",
+                                      gap: 8,
+                                      background: "transparent",
+                                      border: "none",
+                                      padding: 0,
+                                      color: colors.text,
+                                      textAlign: "left",
+                                      cursor: "pointer",
+                                      font: "inherit",
+                                    }}
+                                  >
+                                    <div style={{ minWidth: 0 }}>
+                                      <div
+                                        style={{
+                                          color: colors.primaryText,
+                                          fontSize: 11,
+                                          fontWeight: 800,
+                                          lineHeight: 1.4,
+                                        }}
+                                      >
+                                        {concept.name}
+                                      </div>
+                                      <div
+                                        style={{
+                                          display: "flex",
+                                          flexWrap: "wrap",
+                                          gap: 5,
+                                          marginTop: 3,
+                                          color: colors.muted,
+                                          fontSize: 9,
+                                        }}
+                                      >
+                                        <span
+                                          style={{
+                                            padding: "2px 5px",
+                                            borderRadius: 999,
+                                            background: colors.accentSoft,
+                                            color: colors.accent,
+                                            fontWeight: 700,
+                                          }}
+                                        >
+                                          {concept.has_previous_knowledge
+                                            ? "You know this"
+                                            : "Upcoming"}
+                                        </span>
+                                        {concept.related_count > 0 && (
+                                          <span>
+                                            {concept.related_count} related note
+                                            {concept.related_count === 1 ? "" : "s"}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                    {showDetails && (
+                                      isExpanded ? (
+                                        <ChevronDown size={13} aria-hidden="true" />
+                                      ) : (
+                                        <ChevronRight size={13} aria-hidden="true" />
+                                      )
+                                    )}
+                                  </button>
+
+                                  {isExpanded && showDetails && (
+                                    <div
+                                      style={{
+                                        display: "flex",
+                                        flexDirection: "column",
+                                        gap: 8,
+                                        marginTop: 8,
+                                      }}
+                                    >
+                                      {hasReason && (
+                                        <div>
+                                          <div
+                                            style={{
+                                              color: colors.muted,
+                                              fontSize: 9,
+                                              fontWeight: 800,
+                                              textTransform: "uppercase",
+                                              letterSpacing: 0.5,
+                                              marginBottom: 3,
+                                            }}
+                                          >
+                                            Reason
+                                          </div>
+                                          <div
+                                            style={{
+                                              color: colors.text,
+                                              fontSize: 11,
+                                              lineHeight: 1.5,
+                                              whiteSpace: "pre-wrap",
+                                            }}
+                                          >
+                                            {concept.reason}
+                                          </div>
+                                        </div>
+                                      )}
+
+                                      {hasEvidence && (
+                                        <div>
+                                          <div
+                                            style={{
+                                              color: colors.muted,
+                                              fontSize: 9,
+                                              fontWeight: 800,
+                                              textTransform: "uppercase",
+                                              letterSpacing: 0.5,
+                                              marginBottom: 3,
+                                            }}
+                                          >
+                                            Evidence
+                                          </div>
+                                          <div
+                                            style={{
+                                              color: colors.text,
+                                              fontSize: 11,
+                                              lineHeight: 1.5,
+                                              whiteSpace: "pre-wrap",
+                                            }}
+                                          >
+                                            {concept.evidence}
+                                          </div>
+                                        </div>
+                                      )}
+
+                                      {hasTimestamps && (
+                                        <div>
+                                          <div
+                                            style={{
+                                              color: colors.muted,
+                                              fontSize: 9,
+                                              fontWeight: 800,
+                                              textTransform: "uppercase",
+                                              letterSpacing: 0.5,
+                                              marginBottom: 3,
+                                            }}
+                                          >
+                                            Timestamps
+                                          </div>
+                                          <div style={{ display: "grid", gap: 4 }}>
+                                            {concept.timestamps.map((timestamp, index) => (
+                                              <button
+                                                key={`${concept.name}-${timestamp.seconds}-${index}`}
+                                                type="button"
+                                                onClick={() => jumpToTimestamp(timestamp.seconds)}
+                                                style={{
+                                                  display: "inline-flex",
+                                                  alignItems: "center",
+                                                  gap: 5,
+                                                  width: "fit-content",
+                                                  padding: "3px 6px",
+                                                  borderRadius: 6,
+                                                  border: `1px solid ${colors.border}`,
+                                                  background: colors.surface,
+                                                  color: colors.accent,
+                                                  fontSize: 10,
+                                                  fontWeight: 700,
+                                                  cursor: "pointer",
+                                                }}
+                                              >
+                                                <Play size={10} aria-hidden="true" />
+                                                {formatTimestamp(timestamp.seconds)}
+                                              </button>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )}
+
+                                      {hasPersonalNotes && (
+                                        <div>
+                                          <div
+                                            style={{
+                                              color: colors.muted,
+                                              fontSize: 9,
+                                              fontWeight: 800,
+                                              textTransform: "uppercase",
+                                              letterSpacing: 0.5,
+                                              marginBottom: 3,
+                                            }}
+                                          >
+                                            Personal Notes
+                                          </div>
+                                          <div style={{ display: "grid", gap: 5 }}>
+                                            {concept.personal_notes.map((item) => {
+                                              const note = currentNotes.find(
+                                                (currentNote) => currentNote.id === item.note_id,
+                                              );
+                                              const preview = item.content
+                                                .replace(/\s+/g, " ")
+                                                .trim();
+                                              const contentPreview =
+                                                preview.length > 120
+                                                  ? `${preview.slice(0, 117)}...`
+                                                  : preview;
+                                              const content = (
+                                                <>
+                                                  <span
+                                                    style={{
+                                                      display: "flex",
+                                                      alignItems: "center",
+                                                      gap: 6,
+                                                      fontWeight: 700,
+                                                    }}
+                                                  >
+                                                    <FileText
+                                                      size={11}
+                                                      aria-hidden="true"
+                                                      style={{ color: colors.muted }}
+                                                    />
+                                                    {item.title || "Related note"}
+                                                  </span>
+                                                  {contentPreview && (
+                                                    <span
+                                                      style={{
+                                                        display: "-webkit-box",
+                                                        overflow: "hidden",
+                                                        color: colors.muted,
+                                                        fontSize: 10,
+                                                        WebkitBoxOrient: "vertical",
+                                                        WebkitLineClamp: 2,
+                                                      }}
+                                                    >
+                                                      {contentPreview}
+                                                    </span>
+                                                  )}
+                                                </>
+                                              );
+
+                                              return note ? (
+                                                <button
+                                                  key={`${item.note_id}-${item.chunk_id}`}
+                                                  type="button"
+                                                  onClick={() => openReader(note)}
+                                                  title={item.title || "Related note"}
+                                                  style={{
+                                                    display: "flex",
+                                                    flexDirection: "column",
+                                                    alignItems: "flex-start",
+                                                    gap: 3,
+                                                    width: "100%",
+                                                    minWidth: 0,
+                                                    padding: "5px 6px",
+                                                    border: "none",
+                                                    borderRadius: 6,
+                                                    background: "transparent",
+                                                    color: colors.text,
+                                                    textAlign: "left",
+                                                    cursor: "pointer",
+                                                    fontSize: 10,
+                                                    lineHeight: 1.4,
+                                                  }}
+                                                >
+                                                  {content}
+                                                </button>
+                                              ) : (
+                                                <div
+                                                  key={`${item.note_id}-${item.chunk_id}`}
+                                                  style={{
+                                                    display: "flex",
+                                                    flexDirection: "column",
+                                                    alignItems: "flex-start",
+                                                    gap: 3,
+                                                    width: "100%",
+                                                    minWidth: 0,
+                                                    padding: "5px 6px",
+                                                    borderRadius: 6,
+                                                    background: colors.surface,
+                                                    color: colors.text,
+                                                    fontSize: 10,
+                                                    lineHeight: 1.4,
+                                                  }}
+                                                >
+                                                  {content}
+                                                </div>
+                                              );
+                                            })}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {previousContext !== null &&
+                    previousContext.exact.length === 0 &&
+                    previousContext.related.length === 0 &&
+                    prerequisiteConcepts.length === 0 &&
+                    upcomingConcepts.length === 0 && (
+                      <div
+                        style={{
+                          color: colors.muted,
+                          fontSize: 11,
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        No previous context found.
+                      </div>
+                    )}
+                </>
+              )}
+            </section>
 
             <div
               style={{

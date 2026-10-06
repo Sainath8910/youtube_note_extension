@@ -62,6 +62,111 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "CREATE_PREVIOUS_CONTEXT_JOB") {
+    const videoId =
+      typeof message.videoId === "string" ? message.videoId.trim() : "";
+
+    if (!videoId) {
+      sendResponse({
+        success: false,
+        status: 400,
+        data: null,
+      });
+      return;
+    }
+
+    fetch("http://localhost:8000/api/knowledge/previous-context/jobs/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Dev-User": "devuser",
+      },
+      body: JSON.stringify({ youtube_id: videoId }),
+    })
+      .then(async (response) => {
+        let data: unknown = null;
+        if (response.ok) {
+          try {
+            data = await response.json();
+          } catch {
+            data = null;
+          }
+        }
+
+        sendResponse({
+          success: response.ok,
+          status: response.status,
+          data,
+        });
+      })
+      .catch((error) => {
+        console.error(
+          "[YouTube Knowledge] Previous Context job creation failed:",
+          error,
+        );
+        sendResponse({
+          success: false,
+          status: 0,
+          data: null,
+        });
+      });
+
+    return true;
+  }
+
+  if (message.type === "GET_PREVIOUS_CONTEXT_JOB") {
+    const jobId =
+      typeof message.jobId === "string" ? message.jobId.trim() : "";
+
+    if (!jobId) {
+      sendResponse({
+        success: false,
+        status: 400,
+        data: null,
+      });
+      return;
+    }
+
+    fetch(
+      `http://localhost:8000/api/knowledge/previous-context/jobs/${encodeURIComponent(jobId)}/`,
+      {
+        method: "GET",
+        headers: {
+          "X-Dev-User": "devuser",
+        },
+      },
+    )
+      .then(async (response) => {
+        let data: unknown = null;
+        if (response.ok) {
+          try {
+            data = await response.json();
+          } catch {
+            data = null;
+          }
+        }
+
+        sendResponse({
+          success: response.ok,
+          status: response.status,
+          data,
+        });
+      })
+      .catch((error) => {
+        console.error(
+          "[YouTube Knowledge] Previous Context job status request failed:",
+          error,
+        );
+        sendResponse({
+          success: false,
+          status: 0,
+          data: null,
+        });
+      });
+
+    return true;
+  }
+
   /*
    * --------------------------------------------------
    * GET VIDEO CONTEXT
