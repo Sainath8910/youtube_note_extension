@@ -36,6 +36,7 @@ import {
 import {
   createEmptyDocument,
   documentToPlainText,
+  getListItems,
   normalizeDocument,
   type NoteBlock,
   type VideoNote,
@@ -1178,7 +1179,12 @@ function supportedDocumentBlocks(note: VideoNote): NoteBlock[] {
         block.type === "heading" ||
         block.type === "equation" ||
         block.type === "timestamp" ||
-        block.type === "image"),
+        block.type === "image" ||
+        block.type === "url" ||
+        block.type === "code" ||
+        block.type === "command" ||
+        block.type === "bullet_list" ||
+        block.type === "numbered_list"),
   );
 }
 
@@ -1190,6 +1196,19 @@ function structuredDocumentText(note: VideoNote): string {
           ? block.metadata.alt
           : "";
       }
+
+      if (block.type === "url") {
+        const urlText = block.content.trim();
+        const title = typeof block.metadata?.title === "string"
+          ? block.metadata.title
+          : "";
+        return urlText || title;
+      }
+
+      if (block.type === "bullet_list" || block.type === "numbered_list") {
+        return getListItems(block.content).join("\n");
+      }
+
       return block.content;
     })
     .filter((text) => text.trim().length > 0)

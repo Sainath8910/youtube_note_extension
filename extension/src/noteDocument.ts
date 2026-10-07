@@ -3,7 +3,12 @@ export type NoteBlockType =
   | "heading"
   | "equation"
   | "timestamp"
-  | "image";
+  | "image"
+  | "url"
+  | "code"
+  | "command"
+  | "bullet_list"
+  | "numbered_list";
 
 export interface NoteBlock {
   id: string;
@@ -14,6 +19,13 @@ export interface NoteBlock {
     source?: "url" | "upload";
     url?: string;
     alt?: string;
+    title?: string;
+    description?: string;
+    domain?: string;
+    thumbnail?: string;
+    resource_type?: string;
+    language?: string;
+    shell?: string;
     [key: string]: unknown;
   };
 }
@@ -109,6 +121,19 @@ export function normalizeDocument(note: VideoNote): NoteDocument {
   return createEmptyDocument();
 }
 
+export function getListItems(content: string): string[] {
+  return content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .map((line) => line.replace(/^(?:(?:[-*+•])\s+|\d+[.)]\s+)/, ""))
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+export function normalizeListContent(content: string): string {
+  return getListItems(content).join("\n");
+}
+
 export function documentToPlainText(noteDocument: NoteDocument): string {
   return noteDocument.blocks
     .map((block) => {
@@ -120,6 +145,22 @@ export function documentToPlainText(noteDocument: NoteDocument): string {
         return block.metadata?.alt
           ? `[Image: ${block.metadata.alt}]`
           : "[Image]";
+      }
+
+      if (block.type === "url") {
+        return block.content.trim() || block.metadata?.title || "[URL]";
+      }
+
+      if (block.type === "bullet_list") {
+        const items = getListItems(block.content);
+        return items.length > 0 ? items.map((item) => `• ${item}`).join("\n") : "";
+      }
+
+      if (block.type === "numbered_list") {
+        const items = getListItems(block.content);
+        return items.length > 0
+          ? items.map((item, index) => `${index + 1}. ${item}`).join("\n")
+          : "";
       }
 
       return block.content;

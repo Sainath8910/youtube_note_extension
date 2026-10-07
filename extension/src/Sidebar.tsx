@@ -47,6 +47,8 @@ import {
 import {
   createEmptyDocument,
   documentToPlainText,
+  getListItems,
+  normalizeListContent,
   normalizeDocument,
   normalizeFolderPath,
   type NoteBlock,
@@ -54,6 +56,7 @@ import {
   type NoteDocument,
   type VideoNote,
 } from "./noteDocument";
+import { CopyButton } from "./CopyButton";
 export type {
   NoteBlock,
   NoteBlockType,
@@ -830,6 +833,42 @@ function analysisListItemStyle(colors: ThemeColors): CSSProperties {
   };
 }
 
+function getResourceDomain(value: string): string {
+  if (!value.trim()) return "";
+
+  try {
+    const parsed = new URL(value);
+    return parsed.hostname || "";
+  } catch {
+    return value.replace(/^https?:\/\//i, "").split(/[/?#]/)[0] || value;
+  }
+}
+
+function getSafeResourceUrl(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:"
+      ? parsed.href
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function getResourceTitle(value: string): string {
+  const domain = getResourceDomain(value).toLocaleLowerCase();
+  if (domain === "youtube.com" || domain.endsWith(".youtube.com") || domain === "youtu.be") {
+    return "YouTube video";
+  }
+  if (domain === "drive.google.com" || domain.endsWith(".drive.google.com")) {
+    return "Google Drive resource";
+  }
+  if (domain === "github.com" || domain.endsWith(".github.com")) {
+    return "GitHub resource";
+  }
+  return getResourceDomain(value) || "Resource";
+}
+
 /* -------------------------------------------------------------------------- */
 /* Block Editor                                                               */
 /* -------------------------------------------------------------------------- */
@@ -1203,6 +1242,16 @@ export function BlockEditor({
 
                   <option value="heading">Heading</option>
 
+                  <option value="bullet_list">Bulleted Points</option>
+
+                  <option value="numbered_list">Numbered Points</option>
+
+                  <option value="code">Code</option>
+
+                  <option value="command">Command</option>
+
+                  <option value="url">URL / Resource</option>
+
                   <option value="equation">Equation</option>
 
                   <option value="timestamp">Timestamp</option>
@@ -1415,6 +1464,157 @@ export function BlockEditor({
                   </button>
                 )}
               </div>
+            ) : block.type === "url" ? (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                }}
+              >
+                <input
+                  value={block.content}
+                  aria-label={`URL for block ${index + 1}`}
+                  onChange={(event) =>
+                    updateBlock(block.id, {
+                      content: event.target.value,
+                      metadata: {
+                        ...block.metadata,
+                        url: event.target.value,
+                        domain: getResourceDomain(event.target.value),
+                      },
+                    })
+                  }
+                  placeholder="https://example.com"
+                  style={{
+                    ...editorInputStyle,
+                    color: colors.primaryText,
+                    background: colors.input,
+                    borderColor: colors.border,
+                    fontSize: 12,
+                  }}
+                />
+                <input
+                  value={block.metadata?.title || ""}
+                  aria-label={`Resource title for block ${index + 1}`}
+                  onChange={(event) =>
+                    updateBlock(block.id, {
+                      metadata: {
+                        ...block.metadata,
+                        title: event.target.value,
+                      },
+                    })
+                  }
+                  placeholder="Resource title (optional)"
+                  style={{
+                    ...editorInputStyle,
+                    color: colors.primaryText,
+                    background: colors.input,
+                    borderColor: colors.border,
+                    fontSize: 11,
+                  }}
+                />
+                <textarea
+                  value={block.metadata?.description || ""}
+                  aria-label={`Resource description for block ${index + 1}`}
+                  onChange={(event) =>
+                    updateBlock(block.id, {
+                      metadata: {
+                        ...block.metadata,
+                        description: event.target.value,
+                      },
+                    })
+                  }
+                  placeholder="Short description (optional)"
+                  rows={2}
+                  style={{
+                    ...editorTextareaStyle,
+                    color: colors.primaryText,
+                    background: colors.input,
+                    borderColor: colors.border,
+                    fontSize: 12,
+                  }}
+                />
+              </div>
+            ) : block.type === "code" || block.type === "command" ? (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                }}
+              >
+                <textarea
+                  value={block.content}
+                  aria-label={`${block.type === "code" ? "Code" : "Command"} content for block ${index + 1}`}
+                  onChange={(event) =>
+                    updateBlock(block.id, {
+                      content: event.target.value,
+                    })
+                  }
+                  placeholder={
+                    block.type === "code"
+                      ? "Paste or write source code..."
+                      : "Enter a terminal command..."
+                  }
+                  rows={8}
+                  style={{
+                    ...editorTextareaStyle,
+                    fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+                    fontSize: 12,
+                    color: colors.primaryText,
+                    background: colors.input,
+                    borderColor: colors.border,
+                    whiteSpace: "pre",
+                  }}
+                />
+                <input
+                  value={block.metadata?.[block.type === "code" ? "language" : "shell"] || ""}
+                  aria-label={`${block.type === "code" ? "Language" : "Shell"} for block ${index + 1}`}
+                  onChange={(event) =>
+                    updateBlock(block.id, {
+                      metadata: {
+                        ...block.metadata,
+                        ...(block.type === "code"
+                          ? { language: event.target.value }
+                          : { shell: event.target.value }),
+                      },
+                    })
+                  }
+                  placeholder={
+                    block.type === "code" ? "Language (for example, python)" : "Shell (for example, bash)"
+                  }
+                  style={{
+                    ...editorInputStyle,
+                    color: colors.primaryText,
+                    background: colors.input,
+                    borderColor: colors.border,
+                    fontSize: 11,
+                  }}
+                />
+              </div>
+            ) : block.type === "bullet_list" || block.type === "numbered_list" ? (
+              <textarea
+                value={normalizeListContent(block.content)}
+                aria-label={`${block.type === "bullet_list" ? "Bulleted" : "Numbered"} list for block ${index + 1}`}
+                onChange={(event) =>
+                  updateBlock(block.id, {
+                    content: event.target.value,
+                  })
+                }
+                placeholder={
+                  block.type === "bullet_list"
+                    ? "One item per line"
+                    : "One item per line"
+                }
+                rows={5}
+                style={{
+                  ...editorTextareaStyle,
+                  color: colors.primaryText,
+                  background: colors.input,
+                  borderColor: colors.border,
+                }}
+              />
             ) : (
               <textarea
                 value={block.content}
@@ -1475,6 +1675,66 @@ export function BlockEditor({
                 }}
               >
                 + Heading
+              </button>
+
+              <button
+                type="button"
+                onClick={() => addBlock("bullet_list", block.id)}
+                style={{
+                  ...smallToolButton,
+                  color: colors.muted,
+                  borderColor: colors.border,
+                }}
+              >
+                + Bullets
+              </button>
+
+              <button
+                type="button"
+                onClick={() => addBlock("numbered_list", block.id)}
+                style={{
+                  ...smallToolButton,
+                  color: colors.muted,
+                  borderColor: colors.border,
+                }}
+              >
+                + Numbers
+              </button>
+
+              <button
+                type="button"
+                onClick={() => addBlock("code", block.id)}
+                style={{
+                  ...smallToolButton,
+                  color: colors.muted,
+                  borderColor: colors.border,
+                }}
+              >
+                + Code
+              </button>
+
+              <button
+                type="button"
+                onClick={() => addBlock("command", block.id)}
+                style={{
+                  ...smallToolButton,
+                  color: colors.muted,
+                  borderColor: colors.border,
+                }}
+              >
+                + Command
+              </button>
+
+              <button
+                type="button"
+                onClick={() => addBlock("url", block.id)}
+                style={{
+                  ...smallToolButton,
+                  color: colors.muted,
+                  borderColor: colors.border,
+                }}
+              >
+                + URL
               </button>
 
               <button
@@ -1721,6 +1981,143 @@ export function NoteReader({
             );
           }
 
+          if (block.type === "url") {
+            const resourceUrl = (block.content || block.metadata?.url || "").trim();
+            const safeResourceUrl = getSafeResourceUrl(resourceUrl);
+            const title = block.metadata?.title || getResourceTitle(resourceUrl);
+            const description = block.metadata?.description || "";
+            const domain = block.metadata?.domain || getResourceDomain(resourceUrl) || "";
+
+            return (
+              <a
+                key={block.id}
+                href={safeResourceUrl || undefined}
+                target="_blank"
+                rel="noreferrer noopener"
+                style={{
+                  display: "block",
+                  textDecoration: "none",
+                  border: `1px solid ${colors.border}`,
+                  borderRadius: 10,
+                  background: colors.surface,
+                  padding: 12,
+                  color: colors.text,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                  <div
+                    style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: 8,
+                      background: colors.accentSoft,
+                      color: colors.accent,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontWeight: 700,
+                    }}
+                  >
+                    🔗
+                  </div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontWeight: 700, color: colors.primaryText, marginBottom: 2 }}>
+                      {title || "Resource"}
+                    </div>
+                    {domain ? (
+                      <div style={{ fontSize: 11, color: colors.muted, marginBottom: 4 }}>{domain}</div>
+                    ) : null}
+                    {description ? (
+                      <div style={{ fontSize: 12, color: colors.text, lineHeight: 1.5 }}>{description}</div>
+                    ) : null}
+                    <div style={{ marginTop: 6, fontSize: 11, color: colors.accent, wordBreak: "break-word" }}>
+                      {resourceUrl || "No URL"}
+                    </div>
+                  </div>
+                </div>
+              </a>
+            );
+          }
+
+          if (block.type === "code" || block.type === "command") {
+            const value = block.content || "";
+            const languageLabel =
+              block.type === "code"
+                ? block.metadata?.language || "code"
+                : block.metadata?.shell || "command";
+
+            return (
+              <div
+                key={block.id}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                  borderRadius: 10,
+                  border: `1px solid ${colors.border}`,
+                  background: colors.surface,
+                  padding: 10,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                  }}
+                >
+                  <span style={{ fontSize: 11, color: colors.muted, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                    {block.type === "code" ? "Code" : "Command"}
+                    {languageLabel ? ` · ${languageLabel}` : ""}
+                  </span>
+                  <CopyButton value={value} colors={colors} label="Copy" />
+                </div>
+                <pre
+                  style={{
+                    margin: 0,
+                    padding: 10,
+                    borderRadius: 8,
+                    background: colors.input,
+                    color: colors.text,
+                    fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+                    fontSize: 12,
+                    lineHeight: 1.55,
+                    overflowX: "auto",
+                    whiteSpace: "pre-wrap",
+                  }}
+                >
+                  {value || "Empty content"}
+                </pre>
+              </div>
+            );
+          }
+
+          if (block.type === "bullet_list" || block.type === "numbered_list") {
+            const items = getListItems(block.content);
+            const Element = block.type === "bullet_list" ? "ul" : "ol";
+
+            return (
+              <Element
+                key={block.id}
+                style={{
+                  margin: 0,
+                  paddingLeft: 20,
+                  color: colors.text,
+                  lineHeight: 1.7,
+                }}
+              >
+                {items.length > 0 ? (
+                  items.map((item, itemIndex) => (
+                    <li key={`${block.id}-${itemIndex}`}>{item}</li>
+                  ))
+                ) : (
+                  <li>Empty list</li>
+                )}
+              </Element>
+            );
+          }
+
           return (
             <p
               key={block.id}
@@ -1824,7 +2221,15 @@ function NoteWriter({
       version: 1,
       blocks: noteDocument.blocks.map((block) => ({
         ...block,
-        content: block.type === "image" ? block.content : block.content.trim(),
+        content:
+          block.type === "bullet_list" ||
+          block.type === "numbered_list"
+            ? normalizeListContent(block.content)
+            : block.type === "image" ||
+          block.type === "code" ||
+          block.type === "command"
+            ? block.content
+            : block.content.trim(),
       })),
     };
 

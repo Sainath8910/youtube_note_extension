@@ -52,7 +52,12 @@ function isNoteBlock(value: unknown): value is NoteBlock {
       value.type === "heading" ||
       value.type === "equation" ||
       value.type === "timestamp" ||
-      value.type === "image") &&
+      value.type === "image" ||
+      value.type === "url" ||
+      value.type === "code" ||
+      value.type === "command" ||
+      value.type === "bullet_list" ||
+      value.type === "numbered_list") &&
     typeof value.content === "string"
   );
 }

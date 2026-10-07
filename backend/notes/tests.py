@@ -244,6 +244,75 @@ class NoteFolderOwnershipTests(TestCase):
         index_note.assert_called_once()
 
     @patch("notes.views.index_note")
+    def test_all_note_block_types_round_trip_without_document_loss(self, index_note):
+        document = {
+            "version": 1,
+            "blocks": [
+                {"id": "p-1", "type": "paragraph", "content": "Text"},
+                {"id": "h-1", "type": "heading", "content": "Heading"},
+                {
+                    "id": "bullet-1",
+                    "type": "bullet_list",
+                    "content": "First\nSecond",
+                },
+                {
+                    "id": "numbered-1",
+                    "type": "numbered_list",
+                    "content": "First\nSecond",
+                },
+                {
+                    "id": "code-1",
+                    "type": "code",
+                    "content": "print('hello')",
+                    "metadata": {"language": "python"},
+                },
+                {
+                    "id": "command-1",
+                    "type": "command",
+                    "content": "git status",
+                    "metadata": {"shell": "bash"},
+                },
+                {
+                    "id": "url-1",
+                    "type": "url",
+                    "content": "https://docs.example.com",
+                    "metadata": {"title": "Docs", "domain": "docs.example.com"},
+                },
+                {"id": "equation-1", "type": "equation", "content": "x + y"},
+                {"id": "timestamp-1", "type": "timestamp", "content": "1:25"},
+                {
+                    "id": "image-1",
+                    "type": "image",
+                    "content": "https://example.com/image.png",
+                    "metadata": {"alt": "Example"},
+                },
+            ],
+        }
+
+        response = self.client.post(
+            "/api/notes/",
+            {
+                "title": "Complete note",
+                "content": "Complete note content",
+                "document": document,
+                "note_type": "STANDALONE",
+                "video": None,
+                "timestamp_seconds": None,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        note_id = response.data["id"]
+        self.assertEqual(response.data["document"], document)
+
+        reload_response = self.client.get(f"/api/notes/{note_id}/")
+
+        self.assertEqual(reload_response.status_code, 200)
+        self.assertEqual(reload_response.data["document"], document)
+        index_note.assert_called_once()
+
+    @patch("notes.views.index_note")
     def test_user_cannot_assign_foreign_folder_when_creating_note(
         self,
         index_note,
