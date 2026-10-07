@@ -279,6 +279,215 @@ class FolderListCreateTests(TestCase):
         self.assertEqual(response.status_code, 400)
 
 
+class FolderSearchTests(TestCase):
+    def setUp(self):
+        user_model = get_user_model()
+        self.user = user_model.objects.create_user(username="folder-search-user")
+        self.other_user = user_model.objects.create_user(
+            username="other-folder-search-user",
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        self.programming = Folder.objects.create(
+            user=self.user,
+            name="Programming",
+        )
+        self.java = Folder.objects.create(
+            user=self.user,
+            name="Java",
+            parent=self.programming,
+        )
+        self.collections = Folder.objects.create(
+            user=self.user,
+            name="Collections",
+            parent=self.java,
+        )
+        self.advanced_java = Folder.objects.create(
+            user=self.user,
+            name="Advanced Java",
+        )
+        self.javascript = Folder.objects.create(
+            user=self.user,
+            name="JavaScript",
+            parent=self.programming,
+        )
+        self.private = Folder.objects.create(
+            user=self.other_user,
+            name="Private Java",
+        )
+
+    def search(self, query):
+        return self.client.get("/api/folders/search/", {"q": query})
+
+    def test_search_matches_case_insensitive_substrings(self):
+        for query in ("java", "JAVA", "vanced"):
+            with self.subTest(query=query):
+                response = self.search(query)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(
+                    self.advanced_java.pk,
+                    [folder["id"] for folder in response.data["results"]],
+                )
+
+        no_match_response = self.search("python")
+        self.assertEqual(no_match_response.data["results"], [])
+
+        partial_response = self.search("script")
+        self.assertEqual(
+            [folder["id"] for folder in partial_response.data["results"]],
+            [self.javascript.pk],
+        )
+
+    def test_search_returns_only_name_matches_with_full_paths(self):
+        response = self.search("java")
+
+        self.assertEqual(response.status_code, 200)
+        results_by_id = {
+            folder["id"]: folder for folder in response.data["results"]
+        }
+        self.assertEqual(
+            set(results_by_id),
+            {
+                self.java.pk,
+                self.javascript.pk,
+                self.advanced_java.pk,
+            },
+        )
+        self.assertEqual(
+            results_by_id[self.java.pk]["path"],
+            [
+                {"id": self.programming.pk, "name": "Programming"},
+                {"id": self.java.pk, "name": "Java"},
+            ],
+        )
+        self.assertNotIn(self.collections.pk, results_by_id)
+        self.assertEqual(
+            results_by_id[self.javascript.pk]["path"],
+            [
+                {"id": self.programming.pk, "name": "Programming"},
+                {"id": self.javascript.pk, "name": "JavaScript"},
+            ],
+        )
+        self.assertEqual(
+            results_by_id[self.advanced_java.pk]["path"],
+            [{"id": self.advanced_java.pk, "name": "Advanced Java"}],
+        )
+
+    def test_search_does_not_include_nonmatching_descendants_of_match(self):
+        response = self.search("java")
+
+        self.assertEqual(response.status_code, 200)
+        results_by_id = {
+            folder["id"]: folder for folder in response.data["results"]
+        }
+        self.assertIn(self.java.pk, results_by_id)
+        self.assertNotIn(self.collections.pk, results_by_id)
+        self.assertIn(self.javascript.pk, results_by_id)
+        self.assertEqual(
+            results_by_id[self.java.pk]["path"],
+            [
+                {"id": self.programming.pk, "name": "Programming"},
+                {"id": self.java.pk, "name": "Java"},
+            ],
+        )
+        self.assertEqual(
+            results_by_id[self.javascript.pk]["path"],
+            [
+                {"id": self.programming.pk, "name": "Programming"},
+                {"id": self.javascript.pk, "name": "JavaScript"},
+            ],
+        )
+
+    def test_root_folder_search_returns_path_containing_only_root(self):
+        response = self.search("programming")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [folder["id"] for folder in response.data["results"]],
+            [self.programming.pk],
+        )
+        root_result = next(
+            folder
+            for folder in response.data["results"]
+            if folder["id"] == self.programming.pk
+        )
+        self.assertEqual(
+            root_result["path"],
+            [{"id": self.programming.pk, "name": "Programming"}],
+        )
+
+    def test_empty_and_whitespace_queries_return_no_results(self):
+        for query in ("", " \t\n "):
+            with self.subTest(query=query):
+                response = self.search(query)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.data, {"results": []})
+
+    def test_search_trims_query_whitespace(self):
+        response = self.search("  java  ")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            self.java.pk,
+            [folder["id"] for folder in response.data["results"]],
+        )
+
+    def test_search_is_user_scoped_and_does_not_expose_foreign_ancestors(self):
+        response = self.search("java")
+
+        self.assertNotIn(
+            self.private.pk,
+            [folder["id"] for folder in response.data["results"]],
+        )
+        self.assertNotIn("Private Java", str(response.data))
+
+        foreign_parent = Folder.objects.create(
+            user=self.other_user,
+            name="Private Parent",
+        )
+        mismatched_child = Folder.objects.create(
+            user=self.user,
+            name="Owned Java Child",
+            parent=foreign_parent,
+        )
+        response = self.search("Owned Java")
+        result = next(
+            folder
+            for folder in response.data["results"]
+            if folder["id"] == mismatched_child.pk
+        )
+        self.assertEqual(
+            result["path"],
+            [{"id": mismatched_child.pk, "name": mismatched_child.name}],
+        )
+        self.assertNotIn("Private Parent", str(response.data))
+
+    def test_search_requires_authentication(self):
+        self.client.force_authenticate(user=None)
+
+        response = self.client.get("/api/folders/search/", {"q": "java"})
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_search_results_have_deterministic_name_order(self):
+        first_response = self.search("java")
+        second_response = self.search("java")
+
+        first_results = first_response.data["results"]
+        second_results = second_response.data["results"]
+        self.assertEqual(
+            [folder["id"] for folder in first_results],
+            [folder["id"] for folder in second_results],
+        )
+        self.assertEqual(
+            [folder["name"] for folder in first_results],
+            sorted(
+                (folder["name"] for folder in first_results),
+                key=str.casefold,
+            ),
+        )
+
+
 class FolderDetailAndNotesTests(TestCase):
     def setUp(self):
         user_model = get_user_model()

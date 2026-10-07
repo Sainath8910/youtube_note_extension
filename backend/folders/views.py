@@ -2,6 +2,7 @@ from rest_framework import generics, status
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from notes.models import Note
 from notes.serializers import NoteSerializer
@@ -39,6 +40,72 @@ class FolderListCreateView(generics.ListCreateAPIView):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+
+class FolderSearchView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        query = request.query_params.get("q", "").strip()
+        if not query:
+            return Response({"results": []})
+
+        matching_folders = Folder.objects.filter(
+            user=request.user,
+            name__icontains=query,
+        )
+        folders = {
+            folder["id"]: folder
+            for folder in Folder.objects.filter(
+                user=request.user,
+            ).values("id", "name", "parent_id")
+        }
+        path_cache = {}
+
+        def folder_path(folder_id):
+            if folder_id in path_cache:
+                return path_cache[folder_id]
+
+            chain = []
+            visited = set()
+            current_id = folder_id
+            while current_id not in path_cache:
+                if current_id in visited:
+                    return []
+                visited.add(current_id)
+                folder = folders.get(current_id)
+                if folder is None:
+                    break
+                chain.append(folder)
+                if folder["parent_id"] is None:
+                    break
+                current_id = folder["parent_id"]
+
+            path = list(path_cache.get(current_id, []))
+            for folder in reversed(chain):
+                path = [
+                    *path,
+                    {"id": folder["id"], "name": folder["name"]},
+                ]
+                path_cache[folder["id"]] = path
+            return path_cache.get(folder_id, [])
+
+        results = [
+            {
+                "id": folder_id,
+                "name": folders[folder_id]["name"],
+                "path": folder_path(folder_id),
+            }
+            for folder_id in sorted(
+                (folder.pk for folder in matching_folders),
+                key=lambda folder_id: (
+                    folders[folder_id]["name"].casefold(),
+                    folders[folder_id]["name"],
+                    folder_id,
+                ),
+            )
+        ]
+        return Response({"results": results})
 
 
 class FolderDetailView(generics.RetrieveAPIView):

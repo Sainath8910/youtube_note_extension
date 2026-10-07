@@ -57,7 +57,9 @@ import {
   getDashboardFolderNotes,
   listDashboardFolders,
   renameDashboardFolder,
+  searchDashboardFolders,
   type DashboardFolder,
+  type DashboardFolderSearchResult,
 } from "./folderApi";
 import { FolderOrganizerDialog } from "./FolderOrganizerDialog";
 import {
@@ -136,9 +138,8 @@ const routeContent: Record<
   },
   search: {
     title: "Search",
-    description: "Find ideas across your knowledge.",
-    message:
-      "Dashboard search is not available yet. You can ask questions about your notes from the AI workspace in the YouTube sidebar.",
+    description: "Find folders by name across your learning space.",
+    message: "",
   },
   knowledge: {
     title: "AI / Knowledge",
@@ -497,6 +498,8 @@ function Dashboard() {
             )
           ) : route === "knowledge" ? (
             <DashboardKnowledgeWorkspace dashboardState={dashboardState} />
+          ) : route === "search" ? (
+            <FolderSearchPage />
           ) : (
             <WorkspacePlaceholder route={route} />
           )}
@@ -3750,6 +3753,166 @@ function FolderDetailPage({
         </>
       )}
     </div>
+  );
+}
+
+type FolderSearchState =
+  | { query: string; status: "loading" }
+  | { query: string; status: "loaded"; results: DashboardFolderSearchResult[] }
+  | { query: string; status: "error"; message: string };
+
+function FolderSearchPage() {
+  const [query, setQuery] = useState("");
+  const [retryCount, setRetryCount] = useState(0);
+  const [searchState, setSearchState] = useState<FolderSearchState>({
+    query: "",
+    status: "loading",
+  });
+  const normalizedQuery = query.trim();
+
+  useEffect(() => {
+    if (!normalizedQuery) return;
+
+    let active = true;
+    const timeoutId = window.setTimeout(() => {
+      setSearchState({ query: normalizedQuery, status: "loading" });
+      searchDashboardFolders(normalizedQuery)
+        .then((results) => {
+          if (active) {
+            setSearchState({
+              query: normalizedQuery,
+              status: "loaded",
+              results,
+            });
+          }
+        })
+        .catch((error: unknown) => {
+          if (active) {
+            setSearchState({
+              query: normalizedQuery,
+              status: "error",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Could not search folders.",
+            });
+          }
+        });
+    }, 300);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+    };
+  }, [normalizedQuery, retryCount]);
+
+  const currentSearchState =
+    normalizedQuery === ""
+      ? null
+      : searchState.query === normalizedQuery
+        ? searchState
+        : { query: normalizedQuery, status: "loading" as const };
+
+  return (
+    <section className="content-card folder-search-panel">
+      <label className="folder-search-input">
+        <span className="visually-hidden">Search folders</span>
+        <Search size={17} aria-hidden="true" />
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search folders..."
+          aria-label="Search folders"
+        />
+      </label>
+
+      {currentSearchState === null ? (
+        <div className="folder-search-message" role="status">
+          <Folder size={20} aria-hidden="true" />
+          <div>
+            <strong>Search your folders</strong>
+            <p>Enter a folder name to search.</p>
+          </div>
+        </div>
+      ) : currentSearchState.status === "loading" ? (
+        <div className="folder-search-message" role="status">
+          <span
+            className="folder-search-loading-indicator"
+            aria-hidden="true"
+          />
+          <p>Searching folders...</p>
+        </div>
+      ) : currentSearchState.status === "error" ? (
+        <div className="folder-search-message is-error" role="alert">
+          <AlertCircle size={19} aria-hidden="true" />
+          <div>
+            <strong>Folders could not be searched</strong>
+            <p>{currentSearchState.message}</p>
+            <button
+              className="inline-action"
+              type="button"
+              onClick={() => setRetryCount((count) => count + 1)}
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      ) : currentSearchState.results.length === 0 ? (
+        <div className="folder-search-message" role="status">
+          <Search size={19} aria-hidden="true" />
+          <div>
+            <strong>No matching folders</strong>
+            <p>Try another folder name.</p>
+          </div>
+        </div>
+      ) : (
+        <div className="folder-search-results">
+          <div className="folder-search-results-heading">
+            <h2>Folders</h2>
+            <span>{currentSearchState.results.length}</span>
+          </div>
+          <ul>
+            {currentSearchState.results.map((result) => (
+              <li key={result.id}>
+                <a
+                  className="folder-search-result"
+                  href={`#/folders/${result.id}`}
+                  aria-label={`Open folder: ${result.path
+                    .map((folder) => folder.name)
+                    .join(" / ")}`}
+                >
+                  <Folder size={17} aria-hidden="true" />
+                  <span className="folder-search-path">
+                    {result.path.map((folder, index) => (
+                      <span
+                        className="folder-search-path-segment"
+                        key={folder.id}
+                      >
+                        {index > 0 && (
+                          <span
+                            className="folder-search-path-separator"
+                            aria-hidden="true"
+                          >
+                            /
+                          </span>
+                        )}
+                        {folder.id === result.id ? (
+                          <strong>{folder.name}</strong>
+                        ) : (
+                          <span>{folder.name}</span>
+                        )}
+                      </span>
+                    ))}
+                  </span>
+                  <ArrowUpRight size={15} aria-hidden="true" />
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
   );
 }
 

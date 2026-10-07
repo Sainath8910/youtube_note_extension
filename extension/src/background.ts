@@ -163,6 +163,24 @@ async function respondToFolderRequest(
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === "SEARCH_FOLDERS") {
+    if (typeof message.query !== "string") {
+      sendResponse({
+        success: false,
+        status: 400,
+        data: { detail: "A folder search query is required." },
+      });
+      return;
+    }
+    const query = encodeURIComponent(message.query.trim());
+    void respondToFolderRequest(
+      `search/?q=${query}`,
+      "GET",
+      sendResponse,
+    );
+    return true;
+  }
+
   if (message.type === "LIST_FOLDERS") {
     let path = "";
     if (Object.prototype.hasOwnProperty.call(message, "parent")) {

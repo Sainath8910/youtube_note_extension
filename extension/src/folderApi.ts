@@ -15,6 +15,12 @@ export interface DashboardFolderBreadcrumb {
   name: string;
 }
 
+export interface DashboardFolderSearchResult {
+  id: number;
+  name: string;
+  path: DashboardFolderBreadcrumb[];
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -57,6 +63,23 @@ function isFolderDetail(value: unknown): value is DashboardFolder {
     value.breadcrumbs.every(isFolderBreadcrumb) &&
     value.breadcrumbs.length > 0 &&
     value.breadcrumbs[value.breadcrumbs.length - 1].id === value.id
+  );
+}
+
+function isFolderSearchResult(
+  value: unknown,
+): value is DashboardFolderSearchResult {
+  return (
+    isObject(value) &&
+    typeof value.id === "number" &&
+    Number.isSafeInteger(value.id) &&
+    value.id > 0 &&
+    typeof value.name === "string" &&
+    Array.isArray(value.path) &&
+    value.path.length > 0 &&
+    value.path.every(isFolderBreadcrumb) &&
+    value.path[value.path.length - 1].id === value.id &&
+    value.path[value.path.length - 1].name === value.name
   );
 }
 
@@ -108,6 +131,23 @@ function sendFolderCommand(message: Record<string, unknown>): Promise<unknown> {
       resolve(response.data);
     });
   });
+}
+
+export async function searchDashboardFolders(
+  query: string,
+): Promise<DashboardFolderSearchResult[]> {
+  const data = await sendFolderCommand({
+    type: "SEARCH_FOLDERS",
+    query,
+  });
+  if (
+    !isObject(data) ||
+    !Array.isArray(data.results) ||
+    !data.results.every(isFolderSearchResult)
+  ) {
+    throw new Error("The folders API returned invalid search results.");
+  }
+  return data.results;
 }
 
 export async function listDashboardFolders(
