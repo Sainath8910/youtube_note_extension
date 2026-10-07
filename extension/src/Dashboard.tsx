@@ -49,6 +49,11 @@ import {
   type DashboardNote,
 } from "./dashboardApi";
 import {
+  createDashboardFolder,
+  listDashboardFolders,
+  type DashboardFolder,
+} from "./folderApi";
+import {
   type AskRAGScope,
 } from "./ragApi";
 import {
@@ -119,8 +124,7 @@ const routeContent: Record<
   folders: {
     title: "Folders",
     description: "Keep related learning together.",
-    message:
-      "Folder records exist in the backend, but folder listing and management are not exposed through an API yet.",
+    message: "",
   },
   search: {
     title: "Search",
@@ -436,6 +440,8 @@ function Dashboard() {
                 window.location.hash = `#/notes/${noteId}`;
               }}
             />
+          ) : route === "folders" ? (
+            <FoldersPage />
           ) : route === "knowledge" ? (
             <DashboardKnowledgeWorkspace dashboardState={dashboardState} />
           ) : (
@@ -2777,6 +2783,245 @@ function DashboardKnowledgeWorkspace({
           </div>
         </div>
       </div>
+    </section>
+  );
+}
+
+type FolderPageState =
+  | { status: "loading"; folders: DashboardFolder[] }
+  | { status: "error"; folders: DashboardFolder[]; message: string }
+  | { status: "ready"; folders: DashboardFolder[] };
+
+function FoldersPage() {
+  const [folderState, setFolderState] = useState<FolderPageState>({
+    status: "loading",
+    folders: [],
+  });
+  const [retryCount, setRetryCount] = useState(0);
+  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [folderName, setFolderName] = useState("");
+  const [folderDescription, setFolderDescription] = useState("");
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    listDashboardFolders()
+      .then((folders) => {
+        if (active) setFolderState({ status: "ready", folders });
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setFolderState({
+          status: "error",
+          folders: [],
+          message:
+            error instanceof Error
+              ? error.message
+              : "Could not load your folders.",
+        });
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [retryCount]);
+
+  const retryLoadingFolders = () => {
+    setFolderState((current) => ({
+      status: "loading",
+      folders: current.folders,
+    }));
+    setRetryCount((count) => count + 1);
+  };
+
+  const handleCreateFolder = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setCreateError(null);
+    setIsCreating(true);
+
+    try {
+      await createDashboardFolder({
+        name: folderName,
+        description: folderDescription,
+      });
+      setFolderName("");
+      setFolderDescription("");
+      setIsFormOpen(false);
+      retryLoadingFolders();
+    } catch (error) {
+      setCreateError(
+        error instanceof Error ? error.message : "Could not create this folder.",
+      );
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  const openCreateForm = () => {
+    setCreateError(null);
+    setIsFormOpen(true);
+  };
+
+  const cancelCreateFolder = () => {
+    setIsFormOpen(false);
+    setFolderName("");
+    setFolderDescription("");
+    setCreateError(null);
+  };
+
+  return (
+    <section
+      className="content-card folders-page-card"
+      aria-labelledby="folders-list-heading"
+      aria-busy={folderState.status === "loading"}
+    >
+      <div className="card-heading folders-page-heading">
+        <div>
+          <div className="card-title-row">
+            <span className="section-icon">
+              <Folder size={16} aria-hidden="true" />
+            </span>
+            <h2 id="folders-list-heading">Your folders</h2>
+          </div>
+          <p>Keep related learning together.</p>
+        </div>
+        <button
+          className="new-note-button"
+          type="button"
+          onClick={isFormOpen ? cancelCreateFolder : openCreateForm}
+          aria-expanded={isFormOpen}
+          aria-controls="folder-create-form"
+        >
+          <Plus size={15} aria-hidden="true" />
+          {isFormOpen ? "Cancel" : "Create Folder"}
+        </button>
+      </div>
+
+      {isFormOpen && (
+        <form
+          className="folder-create-form"
+          id="folder-create-form"
+          onSubmit={(event) => void handleCreateFolder(event)}
+        >
+          <label htmlFor="folder-name">Name</label>
+          <input
+            id="folder-name"
+            value={folderName}
+            onChange={(event) => {
+              setFolderName(event.target.value);
+              setCreateError(null);
+            }}
+            maxLength={255}
+            required
+            autoFocus
+          />
+          <label htmlFor="folder-description">Description (optional)</label>
+          <textarea
+            id="folder-description"
+            value={folderDescription}
+            onChange={(event) => setFolderDescription(event.target.value)}
+            rows={3}
+          />
+          {createError && (
+            <div className="inline-state error-state" role="alert">
+              <AlertCircle size={18} aria-hidden="true" />
+              <div>
+                <strong>Folder could not be created</strong>
+                <p>{createError}</p>
+              </div>
+            </div>
+          )}
+          <div className="folder-form-actions">
+            <button
+              className="workspace-secondary-button"
+              type="button"
+              onClick={cancelCreateFolder}
+              disabled={isCreating}
+            >
+              Cancel
+            </button>
+            <button
+              className="workspace-save-button"
+              type="submit"
+              disabled={isCreating || !folderName.trim()}
+            >
+              {isCreating ? (
+                <>
+                  <RefreshCw
+                    className="is-spinning"
+                    size={15}
+                    aria-hidden="true"
+                  />
+                  Creating…
+                </>
+              ) : (
+                <>
+                  <Plus size={15} aria-hidden="true" />
+                  Create
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {folderState.status === "loading" ? (
+        <div
+          className="folder-loading"
+          role="status"
+          aria-label="Loading folders"
+        >
+          <span />
+          <span />
+          <span />
+        </div>
+      ) : folderState.status === "error" ? (
+        <div className="inline-state error-state" role="alert">
+          <AlertCircle size={19} aria-hidden="true" />
+          <div>
+            <strong>Folders could not be loaded</strong>
+            <p>{folderState.message}</p>
+            <button
+              className="inline-action"
+              type="button"
+              onClick={retryLoadingFolders}
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      ) : folderState.folders.length === 0 ? (
+        <div className="folder-empty-state">
+          <span className="empty-state-icon">
+            <Folder size={20} aria-hidden="true" />
+          </span>
+          <h3>No folders yet.</h3>
+          <p>Create a folder to organize your learning.</p>
+          <button
+            className="new-note-button"
+            type="button"
+            onClick={openCreateForm}
+          >
+            <Plus size={15} aria-hidden="true" />
+            Create Folder
+          </button>
+        </div>
+      ) : (
+        <div className="folder-list">
+          {folderState.folders.map((folder) => (
+            <article className="folder-row" key={folder.id}>
+              <span className="folder-row-icon">
+                <Folder size={18} aria-hidden="true" />
+              </span>
+              <div className="folder-row-copy">
+                <h3>{folder.name}</h3>
+                {folder.description.trim() && <p>{folder.description}</p>}
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

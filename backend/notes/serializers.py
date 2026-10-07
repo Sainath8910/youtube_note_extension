@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from .models import Note
+from folders.models import Folder
 from videos.models import Video
 
 
@@ -19,6 +20,11 @@ class NoteVideoMetadataSerializer(serializers.ModelSerializer):
 
 
 class NoteSerializer(serializers.ModelSerializer):
+    folder = serializers.PrimaryKeyRelatedField(
+        queryset=Folder.objects.none(),
+        allow_null=True,
+        required=False,
+    )
     video_detail = NoteVideoMetadataSerializer(
         source="video",
         read_only=True,
@@ -45,6 +51,13 @@ class NoteSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+    def get_fields(self):
+        fields = super().get_fields()
+        request = self.context.get("request")
+        if request is not None and request.user.is_authenticated:
+            fields["folder"].queryset = Folder.objects.filter(user=request.user)
+        return fields
 
     def validate_document(self, value):
         if not isinstance(value, dict):

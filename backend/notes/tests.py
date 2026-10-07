@@ -4,6 +4,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
+from folders.models import Folder
 from notes.models import Note
 from videos.models import Video
 from videos.services.youtube import YouTubeMetadataError
@@ -171,4 +172,178 @@ class VideoNoteCreateTests(TestCase):
             },
         )
 
-# Create your tests here.
+
+class NoteFolderOwnershipTests(TestCase):
+    def setUp(self):
+        user_model = get_user_model()
+        self.user = user_model.objects.create_user(username="note-folder-owner")
+        self.other_user = user_model.objects.create_user(
+            username="other-note-folder-owner",
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        self.folder = Folder.objects.create(user=self.user, name="Own folder")
+        self.foreign_folder = Folder.objects.create(
+            user=self.other_user,
+            name="Foreign folder",
+        )
+        self.note = Note.objects.create(
+            user=self.user,
+            title="Standalone note",
+            content="Existing content",
+            document={
+                "version": 1,
+                "blocks": [
+                    {
+                        "id": "block-1",
+                        "type": "paragraph",
+                        "content": "Existing content",
+                    }
+                ],
+            },
+            note_type=Note.NoteType.STANDALONE,
+            folder=self.folder,
+        )
+        self.standalone_payload = {
+            "title": "New standalone note",
+            "content": "Note content",
+            "document": {
+                "version": 1,
+                "blocks": [
+                    {
+                        "id": "new-block",
+                        "type": "paragraph",
+                        "content": "Note content",
+                    }
+                ],
+            },
+            "note_type": "STANDALONE",
+            "video": None,
+            "timestamp_seconds": None,
+        }
+
+    @patch("notes.views.index_note")
+    def test_user_can_assign_own_folder_when_creating_note(self, index_note):
+        payload = {
+            **self.standalone_payload,
+            "folder": self.folder.pk,
+        }
+
+        response = self.client.post(
+            "/api/notes/",
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["folder"], self.folder.pk)
+        index_note.assert_called_once()
+
+    @patch("notes.views.index_note")
+    def test_user_cannot_assign_foreign_folder_when_creating_note(
+        self,
+        index_note,
+    ):
+        payload = {
+            **self.standalone_payload,
+            "folder": self.foreign_folder.pk,
+        }
+
+        response = self.client.post(
+            "/api/notes/",
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Note.objects.filter(user=self.user).count(), 1)
+        index_note.assert_not_called()
+        self.assertNotIn(self.foreign_folder.name, str(response.data))
+
+    @patch("notes.views.index_note")
+    def test_user_cannot_assign_foreign_folder_through_patch(self, index_note):
+        response = self.client.patch(
+            f"/api/notes/{self.note.pk}/",
+            {"folder": self.foreign_folder.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.note.refresh_from_db()
+        self.assertEqual(self.note.folder, self.folder)
+        index_note.assert_not_called()
+        self.assertNotIn(self.foreign_folder.name, str(response.data))
+
+    @patch("notes.views.index_note")
+    def test_user_cannot_assign_foreign_folder_through_put(self, index_note):
+        payload = {
+            **self.standalone_payload,
+            "folder": self.foreign_folder.pk,
+        }
+
+        response = self.client.put(
+            f"/api/notes/{self.note.pk}/",
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.note.refresh_from_db()
+        self.assertEqual(self.note.folder, self.folder)
+        index_note.assert_not_called()
+        self.assertNotIn(self.foreign_folder.name, str(response.data))
+
+    @patch("notes.views.fetch_youtube_metadata")
+    @patch("notes.views.index_note")
+    def test_video_note_create_rejects_foreign_folder(
+        self,
+        index_note,
+        fetch_metadata,
+    ):
+        fetch_metadata.return_value = VideoNoteCreateTests.metadata
+        payload = {
+            **self.standalone_payload,
+            "youtube_id": VideoNoteCreateTests.youtube_id,
+            "note_type": "VIDEO",
+            "folder": self.foreign_folder.pk,
+        }
+
+        response = self.client.post(
+            "/api/notes/video/",
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Note.objects.filter(title=payload["title"]).exists())
+        index_note.assert_not_called()
+        self.assertNotIn(self.foreign_folder.name, str(response.data))
+
+    @patch("notes.views.index_note")
+    def test_folder_null_removes_note_folder(self, index_note):
+        response = self.client.patch(
+            f"/api/notes/{self.note.pk}/",
+            {"folder": None},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.note.refresh_from_db()
+        self.assertIsNone(self.note.folder)
+        index_note.assert_called_once()
+
+    @patch("notes.views.index_note")
+    def test_patch_omitting_folder_preserves_existing_association(
+        self,
+        index_note,
+    ):
+        response = self.client.patch(
+            f"/api/notes/{self.note.pk}/",
+            {"title": "Updated title"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.note.refresh_from_db()
+        self.assertEqual(self.note.folder, self.folder)
+        index_note.assert_called_once()

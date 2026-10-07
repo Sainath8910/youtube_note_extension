@@ -115,7 +115,72 @@ async function respondToConversationRequest(
   }
 }
 
+async function respondToFolderRequest(
+  method: "GET" | "POST",
+  sendResponse: (response: unknown) => void,
+  data?: unknown,
+): Promise<void> {
+  try {
+    const response = await fetch("http://localhost:8000/api/folders/", {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Dev-User": "devuser",
+      },
+      ...(data === undefined ? {} : { body: JSON.stringify(data) }),
+    });
+    const responseText = await response.text();
+    let responseData: unknown = null;
+    if (responseText) {
+      try {
+        responseData = JSON.parse(responseText);
+      } catch {
+        sendResponse({
+          success: false,
+          status: response.ok ? 502 : response.status,
+          data: { detail: "The Folders service returned invalid JSON." },
+        });
+        return;
+      }
+    }
+    sendResponse({
+      success: response.ok,
+      status: response.status,
+      data: responseData,
+    });
+  } catch (error) {
+    console.error("[YouTube Knowledge] Folder request failed:", error);
+    sendResponse({
+      success: false,
+      status: 0,
+      data: { detail: "Could not reach the Folders service." },
+    });
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === "LIST_FOLDERS") {
+    void respondToFolderRequest("GET", sendResponse);
+    return true;
+  }
+
+  if (message.type === "CREATE_FOLDER") {
+    if (
+      typeof message.data !== "object" ||
+      message.data === null ||
+      Array.isArray(message.data)
+    ) {
+      sendResponse({
+        success: false,
+        status: 400,
+        data: { detail: "Folder details are required." },
+      });
+      return;
+    }
+    void respondToFolderRequest("POST", sendResponse, message.data);
+    return true;
+  }
+
   if (message.type === "REQUEST_NOTE_ASSISTANCE") {
     const noteId = message.noteId;
     if (
