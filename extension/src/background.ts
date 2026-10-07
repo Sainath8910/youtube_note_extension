@@ -117,7 +117,7 @@ async function respondToConversationRequest(
 
 async function respondToFolderRequest(
   path: string,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "PATCH" | "DELETE",
   sendResponse: (response: unknown) => void,
   data?: unknown,
 ): Promise<void> {
@@ -164,7 +164,26 @@ async function respondToFolderRequest(
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "LIST_FOLDERS") {
-    void respondToFolderRequest("", "GET", sendResponse);
+    let path = "";
+    if (Object.prototype.hasOwnProperty.call(message, "parent")) {
+      if (message.parent === null) {
+        path = "?parent=null";
+      } else if (
+        typeof message.parent === "number" &&
+        Number.isSafeInteger(message.parent) &&
+        message.parent > 0
+      ) {
+        path = `?parent=${encodeURIComponent(String(message.parent))}`;
+      } else {
+        sendResponse({
+          success: false,
+          status: 400,
+          data: { detail: "Use null or a valid parent folder ID." },
+        });
+        return;
+      }
+    }
+    void respondToFolderRequest(path, "GET", sendResponse);
     return true;
   }
 
@@ -187,7 +206,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (
     message.type === "GET_FOLDER" ||
-    message.type === "GET_FOLDER_NOTES"
+    message.type === "GET_FOLDER_NOTES" ||
+    message.type === "UPDATE_FOLDER" ||
+    message.type === "DELETE_FOLDER"
   ) {
     const folderId = message.folderId;
     if (
@@ -207,7 +228,32 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       message.type === "GET_FOLDER_NOTES"
         ? `${folderPath}notes/`
         : folderPath;
-    void respondToFolderRequest(path, "GET", sendResponse);
+    if (message.type === "UPDATE_FOLDER") {
+      if (
+        typeof message.data !== "object" ||
+        message.data === null ||
+        Array.isArray(message.data)
+      ) {
+        sendResponse({
+          success: false,
+          status: 400,
+          data: { detail: "Folder update details are required." },
+        });
+        return;
+      }
+      void respondToFolderRequest(
+        path,
+        "PATCH",
+        sendResponse,
+        message.data,
+      );
+      return true;
+    }
+    void respondToFolderRequest(
+      path,
+      message.type === "DELETE_FOLDER" ? "DELETE" : "GET",
+      sendResponse,
+    );
     return true;
   }
 
@@ -824,7 +870,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         document: note.document,
         note_type: "STANDALONE",
         video: null,
-        folder: null,
+        folder: note.folder ?? null,
         timestamp_seconds: null,
       }),
     })

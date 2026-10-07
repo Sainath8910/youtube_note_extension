@@ -30,6 +30,7 @@ class NoteSerializer(serializers.ModelSerializer):
         read_only=True,
         allow_null=True,
     )
+    folder_path = serializers.SerializerMethodField()
 
     class Meta:
         model = Note
@@ -40,6 +41,7 @@ class NoteSerializer(serializers.ModelSerializer):
             "content",
             "note_type",
             "folder",
+            "folder_path",
             "video",
             "video_detail",
             "timestamp_seconds",
@@ -58,6 +60,56 @@ class NoteSerializer(serializers.ModelSerializer):
         if request is not None and request.user.is_authenticated:
             fields["folder"].queryset = Folder.objects.filter(user=request.user)
         return fields
+
+    def get_folder_path(self, note):
+        if note.folder_id is None:
+            return []
+
+        request = self.context.get("request")
+        if (
+            request is None
+            or not request.user.is_authenticated
+            or request.user.pk != note.user_id
+        ):
+            return []
+
+        caches = self.context.setdefault("_folder_path_caches", {})
+        cache = caches.get(note.user_id)
+        if cache is None:
+            folders = {
+                folder["id"]: folder
+                for folder in Folder.objects.filter(
+                    user_id=note.user_id,
+                ).values("id", "name", "parent_id")
+            }
+            cache = {"folders": folders, "paths": {}}
+            caches[note.user_id] = cache
+
+        folder_paths = cache["paths"]
+        if note.folder_id in folder_paths:
+            return list(folder_paths[note.folder_id])
+
+        chain = []
+        visited = set()
+        current_id = note.folder_id
+        while current_id not in folder_paths:
+            if current_id in visited:
+                return []
+            visited.add(current_id)
+            folder = cache["folders"].get(current_id)
+            if folder is None:
+                return []
+            chain.append(folder)
+            if folder["parent_id"] is None:
+                break
+            current_id = folder["parent_id"]
+
+        path = list(folder_paths.get(current_id, []))
+        for folder in reversed(chain):
+            path = [*path, {"id": folder["id"], "name": folder["name"]}]
+            folder_paths[folder["id"]] = path
+
+        return list(folder_paths[note.folder_id])
 
     def validate_document(self, value):
         if not isinstance(value, dict):

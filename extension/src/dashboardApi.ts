@@ -12,8 +12,14 @@ export interface DashboardVideoMetadata {
   thumbnail_url?: string;
 }
 
+export interface DashboardFolderPathItem {
+  id: number;
+  name: string;
+}
+
 export interface DashboardNote extends VideoNote {
   video_detail?: DashboardVideoMetadata | null;
+  folder_path: DashboardFolderPathItem[];
 }
 
 export interface DashboardData {
@@ -91,6 +97,24 @@ function normalizeVideoMetadata(
   return metadata;
 }
 
+function normalizeFolderPath(value: unknown): DashboardFolderPathItem[] {
+  if (!Array.isArray(value)) return [];
+  const path: DashboardFolderPathItem[] = [];
+  for (const item of value) {
+    if (
+      !isObject(item) ||
+      typeof item.id !== "number" ||
+      !Number.isSafeInteger(item.id) ||
+      item.id < 1 ||
+      typeof item.name !== "string"
+    ) {
+      return [];
+    }
+    path.push({ id: item.id, name: item.name });
+  }
+  return path;
+}
+
 export function normalizeNote(value: unknown, index: number): DashboardNote {
   if (!isObject(value)) {
     throw new Error(`Note ${index + 1} has an invalid format.`);
@@ -123,6 +147,7 @@ export function normalizeNote(value: unknown, index: number): DashboardNote {
     content: value.content,
     document: normalizeDocument(value.document),
     video_detail: normalizeVideoMetadata(value.video_detail),
+    folder_path: normalizeFolderPath(value.folder_path),
     note_type: value.note_type,
     video: value.video,
     folder: value.folder,
@@ -193,6 +218,18 @@ export async function updateDashboardNote(
   return normalizeSavedNote(savedNote);
 }
 
+export async function updateDashboardNoteFolder(
+  noteId: number,
+  folder: number | null,
+): Promise<DashboardNote> {
+  const savedNote = await sendNoteCommand({
+    type: "UPDATE_NOTE",
+    noteId,
+    data: { folder },
+  });
+  return normalizeSavedNote(savedNote);
+}
+
 export function upsertDashboardNote(
   data: DashboardData,
   note: DashboardNote,
@@ -208,6 +245,7 @@ export async function createStandaloneDashboardNote(data: {
   title: string;
   content: string;
   document: NoteDocument;
+  folder: number | null;
 }): Promise<DashboardNote> {
   const savedNote = await sendNoteCommand({
     type: "CREATE_STANDALONE_NOTE",

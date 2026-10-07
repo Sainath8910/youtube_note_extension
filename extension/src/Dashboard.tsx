@@ -43,18 +43,23 @@ import {
 import {
   createStandaloneDashboardNote,
   loadDashboardData,
+  updateDashboardNoteFolder,
   updateDashboardNote,
   upsertDashboardNote,
   type DashboardData,
+  type DashboardFolderPathItem,
   type DashboardNote,
 } from "./dashboardApi";
 import {
   createDashboardFolder,
+  deleteDashboardFolder,
   getDashboardFolder,
   getDashboardFolderNotes,
   listDashboardFolders,
+  renameDashboardFolder,
   type DashboardFolder,
 } from "./folderApi";
+import { FolderOrganizerDialog } from "./FolderOrganizerDialog";
 import {
   type AskRAGScope,
 } from "./ragApi";
@@ -391,6 +396,18 @@ function Dashboard() {
           );
           if (dashboardState.status === "error") refreshDashboard();
         }}
+        onFolderUpdated={(updatedNote) => {
+          savedNoteOverridesRef.current.set(updatedNote.id, updatedNote);
+          setDashboardState((current) =>
+            current.status === "ready"
+              ? {
+                  status: "ready",
+                  data: upsertDashboardNote(current.data, updatedNote),
+                }
+              : current,
+          );
+          if (dashboardState.status === "error") refreshDashboard();
+        }}
       />
     );
   }
@@ -404,7 +421,7 @@ function Dashboard() {
           aria-label="Close navigation"
           onClick={closeMobileNavigation}
         />
-      )}
+        )}
       <Sidebar
         activeRoute={route}
         mobileOpen={mobileNavigationOpen}
@@ -1174,6 +1191,7 @@ interface NoteWorkspaceProps {
   onBackToNotes: () => void;
   onDirtyChange: (dirty: boolean) => void;
   onSaved: (note: DashboardNote) => void;
+  onFolderUpdated: (note: DashboardNote) => void;
 }
 
 function NoteWorkspaceLoading() {
@@ -1229,6 +1247,7 @@ function NoteWorkspace({
   onBackToNotes,
   onDirtyChange,
   onSaved,
+  onFolderUpdated,
 }: NoteWorkspaceProps) {
   const isNew = location.mode === "new";
   const [mode, setMode] = useState<NoteWorkspaceMode>(
@@ -1241,6 +1260,10 @@ function NoteWorkspace({
   const [noteDocument, setNoteDocument] = useState(savedDocument);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [isOrganizerOpen, setIsOrganizerOpen] = useState(false);
+  const [newNoteFolder, setNewNoteFolder] = useState<DashboardFolder | null>(
+    null,
+  );
   const [noteProposals, setNoteProposals] = useState<
     Map<string, NoteImprovementProposal>
   >(() => new Map());
@@ -1254,11 +1277,14 @@ function NoteWorkspace({
   const [thumbnailUnavailable, setThumbnailUnavailable] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const pageTitleRef = useRef<HTMLHeadingElement>(null);
+
   const serializedDocument = JSON.stringify(noteDocument);
   const serializedSavedDocument = JSON.stringify(savedDocument);
   const isDirty =
     (isNew
-      ? title.length > 0 || serializedDocument !== serializedSavedDocument
+      ? title.length > 0 ||
+        serializedDocument !== serializedSavedDocument ||
+        newNoteFolder !== null
       : Boolean(
           note &&
             (title !== note.title ||
@@ -1525,6 +1551,7 @@ function NoteWorkspace({
           title: normalizedTitle,
           content,
           document: noteDocument,
+          folder: newNoteFolder?.id ?? null,
         });
       } else {
         if (!note) return;
@@ -1676,6 +1703,66 @@ function NoteWorkspace({
               </button>
             )}
           </div>
+
+          <div className="note-folder-organize-row">
+            <div>
+              <span className="note-folder-organize-label">
+                {isNew ? "Save to" : "Folder"}
+              </span>
+              <FolderPath
+                path={
+                  isNew
+                    ? newNoteFolder?.breadcrumbs ??
+                      (newNoteFolder
+                        ? [{ id: newNoteFolder.id, name: newNoteFolder.name }]
+                        : [])
+                    : note?.folder_path ?? []
+                }
+                className="note-folder-organize-path"
+                emptyLabel={
+                  isNew || note?.folder == null
+                    ? "No Folder"
+                    : "Folder path unavailable"
+                }
+              />
+            </div>
+            <button
+              className="workspace-secondary-button"
+              type="button"
+              onClick={() => setIsOrganizerOpen(true)}
+              disabled={isSaving}
+            >
+              <Folder size={15} aria-hidden="true" />
+              {isNew ? "Choose Folder" : "Organize"}
+            </button>
+          </div>
+
+          {isOrganizerOpen && (
+            <FolderOrganizerDialog
+              initialFolderId={
+                isNew ? newNoteFolder?.id ?? null : note?.folder ?? null
+              }
+              onCancel={() => setIsOrganizerOpen(false)}
+              onSaveHere={async (folderId, folder) => {
+                if (isNew) {
+                  setNewNoteFolder(folder);
+                  setIsOrganizerOpen(false);
+                  return;
+                }
+                if (!note) {
+                  throw new Error("This note is no longer available.");
+                }
+                if ((note.folder ?? null) !== folderId) {
+                  const updatedNote = await updateDashboardNoteFolder(
+                    note.id,
+                    folderId,
+                  );
+                  onFolderUpdated(updatedNote);
+                }
+                setIsOrganizerOpen(false);
+              }}
+            />
+          )}
 
           {hasVideo && (
             <section className="workspace-video-context" aria-label="Video context">
@@ -1927,7 +2014,7 @@ function NoteRows({
   totalNotes,
   onViewNotes,
 }: {
-  notes: VideoNote[];
+  notes: Array<VideoNote & { folder_path?: DashboardFolderPathItem[] }>;
   onSelectNote?: (noteId: number) => void;
   compact?: boolean;
   totalNotes?: number;
@@ -1982,8 +2069,17 @@ function NoteRows({
                 {rowContent}
               </button>
             ) : (
-              rowContent
+              <div className="note-row-select-button is-static">
+                {rowContent}
+              </div>
             )}
+            <FolderPath
+              path={note.folder_path ?? []}
+              className="note-row-folder-path"
+              emptyLabel={
+                note.folder == null ? "No Folder" : "Folder path unavailable"
+              }
+            />
           </article>
         );
       })}
@@ -1997,6 +2093,31 @@ function NoteRows({
           </button>
         )}
     </div>
+  );
+}
+
+function FolderPath({
+  path,
+  className,
+  emptyLabel = "No Folder",
+}: {
+  path: DashboardFolderPathItem[];
+  className: string;
+  emptyLabel?: string;
+}) {
+  return (
+    <nav className={className} aria-label="Folder path">
+      {path.length === 0 ? (
+        <span>{emptyLabel}</span>
+      ) : (
+        path.map((folder, index) => (
+          <span className="folder-path-segment" key={folder.id}>
+            {index > 0 && <span aria-hidden="true">/</span>}
+            <a href={`#/folders/${folder.id}`}>{folder.name}</a>
+          </span>
+        ))
+      )}
+    </nav>
   );
 }
 
@@ -2853,6 +2974,110 @@ type FolderPageState =
   | { status: "error"; folders: DashboardFolder[]; message: string }
   | { status: "ready"; folders: DashboardFolder[] };
 
+function FolderCreateForm({
+  parentId,
+  onCreated,
+  onCancel,
+}: {
+  parentId: number | null;
+  onCreated: () => void;
+  onCancel: () => void;
+}) {
+  const [folderName, setFolderName] = useState("");
+  const [folderDescription, setFolderDescription] = useState("");
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+
+  const handleCreateFolder = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setCreateError(null);
+    setIsCreating(true);
+
+    try {
+      await createDashboardFolder({
+        name: folderName,
+        description: folderDescription,
+        parent: parentId,
+      });
+      onCreated();
+    } catch (error) {
+      setCreateError(
+        error instanceof Error ? error.message : "Could not create this folder.",
+      );
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  return (
+    <form
+      className="folder-create-form"
+      id="folder-create-form"
+      onSubmit={(event) => void handleCreateFolder(event)}
+    >
+      <label htmlFor="folder-name">Name</label>
+      <input
+        id="folder-name"
+        value={folderName}
+        onChange={(event) => {
+          setFolderName(event.target.value);
+          setCreateError(null);
+        }}
+        maxLength={255}
+        required
+        autoFocus
+      />
+      <label htmlFor="folder-description">Description (optional)</label>
+      <textarea
+        id="folder-description"
+        value={folderDescription}
+        onChange={(event) => setFolderDescription(event.target.value)}
+        rows={3}
+      />
+      {createError && (
+        <div className="inline-state error-state" role="alert">
+          <AlertCircle size={18} aria-hidden="true" />
+          <div>
+            <strong>Folder could not be created</strong>
+            <p>{createError}</p>
+          </div>
+        </div>
+      )}
+      <div className="folder-form-actions">
+        <button
+          className="workspace-secondary-button"
+          type="button"
+          onClick={onCancel}
+          disabled={isCreating}
+        >
+          Cancel
+        </button>
+        <button
+          className="workspace-save-button"
+          type="submit"
+          disabled={isCreating || !folderName.trim()}
+        >
+          {isCreating ? (
+            <>
+              <RefreshCw
+                className="is-spinning"
+                size={15}
+                aria-hidden="true"
+              />
+              Creating…
+            </>
+          ) : (
+            <>
+              <Plus size={15} aria-hidden="true" />
+              Create
+            </>
+          )}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function FoldersPage() {
   const [folderState, setFolderState] = useState<FolderPageState>({
     status: "loading",
@@ -2860,14 +3085,10 @@ function FoldersPage() {
   });
   const [retryCount, setRetryCount] = useState(0);
   const [isFormOpen, setIsFormOpen] = useState(false);
-  const [folderName, setFolderName] = useState("");
-  const [folderDescription, setFolderDescription] = useState("");
-  const [createError, setCreateError] = useState<string | null>(null);
-  const [isCreating, setIsCreating] = useState(false);
 
   useEffect(() => {
     let active = true;
-    listDashboardFolders()
+    listDashboardFolders(null)
       .then((folders) => {
         if (active) setFolderState({ status: "ready", folders });
       })
@@ -2896,40 +3117,8 @@ function FoldersPage() {
     setRetryCount((count) => count + 1);
   };
 
-  const handleCreateFolder = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setCreateError(null);
-    setIsCreating(true);
-
-    try {
-      await createDashboardFolder({
-        name: folderName,
-        description: folderDescription,
-      });
-      setFolderName("");
-      setFolderDescription("");
-      setIsFormOpen(false);
-      retryLoadingFolders();
-    } catch (error) {
-      setCreateError(
-        error instanceof Error ? error.message : "Could not create this folder.",
-      );
-    } finally {
-      setIsCreating(false);
-    }
-  };
-
-  const openCreateForm = () => {
-    setCreateError(null);
-    setIsFormOpen(true);
-  };
-
-  const cancelCreateFolder = () => {
-    setIsFormOpen(false);
-    setFolderName("");
-    setFolderDescription("");
-    setCreateError(null);
-  };
+  const openCreateForm = () => setIsFormOpen(true);
+  const closeCreateForm = () => setIsFormOpen(false);
 
   return (
     <section
@@ -2943,88 +3132,31 @@ function FoldersPage() {
             <span className="section-icon">
               <Folder size={16} aria-hidden="true" />
             </span>
-            <h2 id="folders-list-heading">Your folders</h2>
+            <h2 id="folders-list-heading">Folders</h2>
           </div>
           <p>Keep related learning together.</p>
         </div>
         <button
           className="new-note-button"
           type="button"
-          onClick={isFormOpen ? cancelCreateFolder : openCreateForm}
+          onClick={isFormOpen ? closeCreateForm : openCreateForm}
           aria-expanded={isFormOpen}
           aria-controls="folder-create-form"
         >
           <Plus size={15} aria-hidden="true" />
-          {isFormOpen ? "Cancel" : "Create Folder"}
+          {isFormOpen ? "Cancel" : "New Folder"}
         </button>
       </div>
 
       {isFormOpen && (
-        <form
-          className="folder-create-form"
-          id="folder-create-form"
-          onSubmit={(event) => void handleCreateFolder(event)}
-        >
-          <label htmlFor="folder-name">Name</label>
-          <input
-            id="folder-name"
-            value={folderName}
-            onChange={(event) => {
-              setFolderName(event.target.value);
-              setCreateError(null);
-            }}
-            maxLength={255}
-            required
-            autoFocus
-          />
-          <label htmlFor="folder-description">Description (optional)</label>
-          <textarea
-            id="folder-description"
-            value={folderDescription}
-            onChange={(event) => setFolderDescription(event.target.value)}
-            rows={3}
-          />
-          {createError && (
-            <div className="inline-state error-state" role="alert">
-              <AlertCircle size={18} aria-hidden="true" />
-              <div>
-                <strong>Folder could not be created</strong>
-                <p>{createError}</p>
-              </div>
-            </div>
-          )}
-          <div className="folder-form-actions">
-            <button
-              className="workspace-secondary-button"
-              type="button"
-              onClick={cancelCreateFolder}
-              disabled={isCreating}
-            >
-              Cancel
-            </button>
-            <button
-              className="workspace-save-button"
-              type="submit"
-              disabled={isCreating || !folderName.trim()}
-            >
-              {isCreating ? (
-                <>
-                  <RefreshCw
-                    className="is-spinning"
-                    size={15}
-                    aria-hidden="true"
-                  />
-                  Creating…
-                </>
-              ) : (
-                <>
-                  <Plus size={15} aria-hidden="true" />
-                  Create
-                </>
-              )}
-            </button>
-          </div>
-        </form>
+        <FolderCreateForm
+          parentId={null}
+          onCreated={() => {
+            closeCreateForm();
+            retryLoadingFolders();
+          }}
+          onCancel={closeCreateForm}
+        />
       )}
 
       {folderState.status === "loading" ? (
@@ -3065,7 +3197,7 @@ function FoldersPage() {
             onClick={openCreateForm}
           >
             <Plus size={15} aria-hidden="true" />
-            Create Folder
+            New Folder
           </button>
         </div>
       ) : (
@@ -3107,6 +3239,11 @@ type FolderNotesState =
   | { status: "error"; message: string }
   | { status: "ready"; notes: DashboardNote[] };
 
+type FolderChildrenState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; folders: DashboardFolder[] };
+
 function FolderDetailPage({
   folderId,
   onOpenNote,
@@ -3120,8 +3257,21 @@ function FolderDetailPage({
   const [notesState, setNotesState] = useState<FolderNotesState>({
     status: "loading",
   });
+  const [childrenState, setChildrenState] = useState<FolderChildrenState>({
+    status: "loading",
+  });
   const [folderRetryCount, setFolderRetryCount] = useState(0);
   const [notesRetryCount, setNotesRetryCount] = useState(0);
+  const [childrenRetryCount, setChildrenRetryCount] = useState(0);
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isRenameOpen, setIsRenameOpen] = useState(false);
+  const [renameName, setRenameName] = useState("");
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [isDeleteConfirmationOpen, setIsDeleteConfirmationOpen] =
+    useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -3168,9 +3318,33 @@ function FolderDetailPage({
     };
   }, [folderId, folderState.status, folderRetryCount, notesRetryCount]);
 
+  useEffect(() => {
+    if (folderState.status !== "ready") return;
+    let active = true;
+    listDashboardFolders(folderId)
+      .then((folders) => {
+        if (active) setChildrenState({ status: "ready", folders });
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setChildrenState({
+          status: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Could not load subfolders.",
+        });
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [folderId, folderState.status, folderRetryCount, childrenRetryCount]);
+
   const retryFolder = () => {
     setFolderState({ status: "loading" });
     setNotesState({ status: "loading" });
+    setChildrenState({ status: "loading" });
     setFolderRetryCount((count) => count + 1);
   };
 
@@ -3179,11 +3353,87 @@ function FolderDetailPage({
     setNotesRetryCount((count) => count + 1);
   };
 
+  const retryChildren = () => {
+    setChildrenState({ status: "loading" });
+    setChildrenRetryCount((count) => count + 1);
+  };
+
+  const openRename = () => {
+    if (folderState.status !== "ready") return;
+    setRenameName(folderState.folder.name);
+    setRenameError(null);
+    setIsRenameOpen(true);
+  };
+
+  const handleRename = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (folderState.status !== "ready" || isRenaming) return;
+    setIsRenaming(true);
+    setRenameError(null);
+    try {
+      const renamedFolder = await renameDashboardFolder(
+        folderId,
+        renameName.trim(),
+      );
+      setFolderState({ status: "ready", folder: renamedFolder });
+      setIsRenameOpen(false);
+    } catch (error) {
+      setRenameError(
+        error instanceof Error
+          ? error.message
+          : "Could not rename this folder.",
+      );
+    } finally {
+      setIsRenaming(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (isDeleting) return;
+    if (folderState.status !== "ready") return;
+    const parentId = folderState.folder.parent;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteDashboardFolder(folderId);
+      window.location.hash = parentId
+        ? `#/folders/${parentId}`
+        : "#/folders";
+    } catch (error) {
+      setDeleteError(
+        error instanceof Error
+          ? error.message
+          : "Could not delete this folder.",
+      );
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const folder =
+    folderState.status === "ready" ? folderState.folder : null;
+  const breadcrumbs = folder?.breadcrumbs ?? [];
+  const parentBreadcrumb =
+    breadcrumbs.length > 1
+      ? breadcrumbs[breadcrumbs.length - 2]
+      : null;
+  const backHref = folder?.parent
+    ? `#/folders/${folder.parent}`
+    : "#/folders";
+  const backLabel = parentBreadcrumb
+    ? `Back to ${parentBreadcrumb.name}`
+    : "Back to Folders";
+  const isFolderAndNotesEmpty =
+    childrenState.status === "ready" &&
+    childrenState.folders.length === 0 &&
+    notesState.status === "ready" &&
+    notesState.notes.length === 0;
+
   return (
     <div className="folder-detail-page">
-      <a className="workspace-back-button folder-back-link" href="#/folders">
+      <a className="workspace-back-button folder-back-link" href={backHref}>
         <ArrowLeft size={17} aria-hidden="true" />
-        <span>Back to Folders</span>
+        <span>{backLabel}</span>
       </a>
 
       {folderState.status === "loading" ? (
@@ -3214,12 +3464,240 @@ function FolderDetailPage({
         </section>
       ) : (
         <>
-          <header className="folder-detail-heading">
-            <h2>{folderState.folder.name}</h2>
-            {folderState.folder.description.trim() && (
-              <p>{folderState.folder.description}</p>
+          <nav className="folder-breadcrumbs" aria-label="Folder breadcrumbs">
+            <a href="#/folders">Folders</a>
+            {breadcrumbs.map((breadcrumb, index) => {
+              const isCurrent = index === breadcrumbs.length - 1;
+              return (
+                <span className="folder-breadcrumb-item" key={breadcrumb.id}>
+                  <span aria-hidden="true">/</span>
+                  {isCurrent ? (
+                    <span aria-current="page">{breadcrumb.name}</span>
+                  ) : (
+                    <a href={`#/folders/${breadcrumb.id}`}>
+                      {breadcrumb.name}
+                    </a>
+                  )}
+                </span>
+              );
+            })}
+          </nav>
+          <div className="folder-detail-header">
+            <header className="folder-detail-heading">
+              <h2>{folderState.folder.name}</h2>
+              {folderState.folder.description.trim() && (
+                <p>{folderState.folder.description}</p>
+              )}
+            </header>
+            {!isRenameOpen &&
+              !isDeleteConfirmationOpen &&
+              !isCreateOpen && (
+                <div className="folder-management-actions">
+                  <button
+                    className="new-note-button"
+                    type="button"
+                    onClick={() => setIsCreateOpen(true)}
+                  >
+                    <Plus size={15} aria-hidden="true" />
+                    New Folder
+                  </button>
+                  <button
+                    className="workspace-secondary-button"
+                    type="button"
+                    onClick={openRename}
+                  >
+                    Rename
+                  </button>
+                  <button
+                    className="folder-delete-button"
+                    type="button"
+                    onClick={() => {
+                      setDeleteError(null);
+                      setIsDeleteConfirmationOpen(true);
+                    }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              )}
+          </div>
+
+          {isCreateOpen && (
+            <FolderCreateForm
+              parentId={folderId}
+              onCreated={() => {
+                setIsCreateOpen(false);
+                retryChildren();
+              }}
+              onCancel={() => setIsCreateOpen(false)}
+            />
+          )}
+
+          {isRenameOpen && (
+            <form
+              className="folder-create-form folder-rename-form"
+              onSubmit={(event) => void handleRename(event)}
+            >
+              <label htmlFor="folder-rename-name">Folder name</label>
+              <input
+                id="folder-rename-name"
+                value={renameName}
+                onChange={(event) => {
+                  setRenameName(event.target.value);
+                  setRenameError(null);
+                }}
+                maxLength={255}
+                required
+                autoFocus
+              />
+              {renameError && (
+                <div className="inline-state error-state" role="alert">
+                  <AlertCircle size={18} aria-hidden="true" />
+                  <div>
+                    <strong>Folder could not be renamed</strong>
+                    <p>{renameError}</p>
+                  </div>
+                </div>
+              )}
+              <div className="folder-form-actions">
+                <button
+                  className="workspace-secondary-button"
+                  type="button"
+                  onClick={() => {
+                    setIsRenameOpen(false);
+                    setRenameError(null);
+                  }}
+                  disabled={isRenaming}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="workspace-save-button"
+                  type="submit"
+                  disabled={isRenaming || !renameName.trim()}
+                >
+                  {isRenaming ? "Saving…" : "Save"}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {isDeleteConfirmationOpen && (
+            <section
+              className="folder-delete-confirmation"
+              aria-labelledby="folder-delete-title"
+            >
+              <h3 id="folder-delete-title">Delete this folder?</h3>
+              <p>
+                The folder will be removed, but the notes inside it will not be
+                deleted. They will become unassigned.
+              </p>
+              {deleteError && (
+                <div className="inline-state error-state" role="alert">
+                  <AlertCircle size={18} aria-hidden="true" />
+                  <div>
+                    <strong>Folder could not be deleted</strong>
+                    <p>{deleteError}</p>
+                  </div>
+                </div>
+              )}
+              <div className="folder-form-actions">
+                <button
+                  className="workspace-secondary-button"
+                  type="button"
+                  onClick={() => {
+                    setIsDeleteConfirmationOpen(false);
+                    setDeleteError(null);
+                  }}
+                  disabled={isDeleting}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="folder-delete-button"
+                  type="button"
+                  onClick={() => void handleDelete()}
+                  disabled={isDeleting}
+                >
+                  {isDeleting ? "Deleting…" : "Delete Folder"}
+                </button>
+              </div>
+            </section>
+          )}
+
+          <section className="content-card folder-subfolders-card">
+            <div className="card-heading">
+              <div className="card-title-row">
+                <span className="section-icon">
+                  <Folder size={16} aria-hidden="true" />
+                </span>
+                <h2>Subfolders</h2>
+              </div>
+            </div>
+            {childrenState.status === "loading" ? (
+              <div
+                className="folder-loading"
+                role="status"
+                aria-label="Loading subfolders"
+              >
+                <span />
+                <span />
+              </div>
+            ) : childrenState.status === "error" ? (
+              <div className="inline-state error-state" role="alert">
+                <AlertCircle size={19} aria-hidden="true" />
+                <div>
+                  <strong>Subfolders could not be loaded</strong>
+                  <p>{childrenState.message}</p>
+                  <button
+                    className="inline-action"
+                    type="button"
+                    onClick={retryChildren}
+                  >
+                    Try again
+                  </button>
+                </div>
+              </div>
+            ) : childrenState.folders.length === 0 ? (
+              <div className="folder-notes-empty" role="status">
+                <span className="empty-state-icon">
+                  <Folder size={20} aria-hidden="true" />
+                </span>
+                <h3>
+                  {isFolderAndNotesEmpty
+                    ? "No subfolders or notes yet."
+                    : "No subfolders yet."}
+                </h3>
+                {isFolderAndNotesEmpty && (
+                  <p>Create a subfolder to organize this folder.</p>
+                )}
+              </div>
+            ) : (
+              <div className="folder-list">
+                {childrenState.folders.map((child) => (
+                  <a
+                    className="folder-row"
+                    href={`#/folders/${child.id}`}
+                    key={child.id}
+                    aria-label={`Open folder: ${child.name}`}
+                  >
+                    <span className="folder-row-icon">
+                      <Folder size={18} aria-hidden="true" />
+                    </span>
+                    <div className="folder-row-copy">
+                      <h3>{child.name}</h3>
+                      {child.description.trim() && <p>{child.description}</p>}
+                    </div>
+                    <ArrowUpRight
+                      className="folder-row-arrow"
+                      size={16}
+                      aria-hidden="true"
+                    />
+                  </a>
+                ))}
+              </div>
             )}
-          </header>
+          </section>
 
           <section className="content-card folder-notes-card">
             <div className="card-heading">

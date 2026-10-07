@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 
 
 class Folder(models.Model):
@@ -30,7 +31,12 @@ class Folder(models.Model):
             models.UniqueConstraint(
                 fields=["user", "parent", "name"],
                 name="unique_folder_name_per_parent",
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["user", "name"],
+                condition=Q(parent__isnull=True),
+                name="unique_root_folder_name_per_user",
+            ),
         ]
 
     def __str__(self):

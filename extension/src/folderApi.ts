@@ -7,6 +7,12 @@ export interface DashboardFolder {
   parent: number | null;
   created_at: string;
   updated_at: string;
+  breadcrumbs?: DashboardFolderBreadcrumb[];
+}
+
+export interface DashboardFolderBreadcrumb {
+  id: number;
+  name: string;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -29,6 +35,28 @@ function isFolder(value: unknown): value is DashboardFolder {
     Number.isFinite(Date.parse(value.created_at)) &&
     typeof value.updated_at === "string" &&
     Number.isFinite(Date.parse(value.updated_at))
+  );
+}
+
+function isFolderBreadcrumb(
+  value: unknown,
+): value is DashboardFolderBreadcrumb {
+  return (
+    isObject(value) &&
+    typeof value.id === "number" &&
+    Number.isSafeInteger(value.id) &&
+    value.id > 0 &&
+    typeof value.name === "string"
+  );
+}
+
+function isFolderDetail(value: unknown): value is DashboardFolder {
+  return (
+    isFolder(value) &&
+    Array.isArray(value.breadcrumbs) &&
+    value.breadcrumbs.every(isFolderBreadcrumb) &&
+    value.breadcrumbs.length > 0 &&
+    value.breadcrumbs[value.breadcrumbs.length - 1].id === value.id
   );
 }
 
@@ -82,8 +110,13 @@ function sendFolderCommand(message: Record<string, unknown>): Promise<unknown> {
   });
 }
 
-export async function listDashboardFolders(): Promise<DashboardFolder[]> {
-  const data = await sendFolderCommand({ type: "LIST_FOLDERS" });
+export async function listDashboardFolders(
+  parentId?: number | null,
+): Promise<DashboardFolder[]> {
+  const data = await sendFolderCommand({
+    type: "LIST_FOLDERS",
+    ...(parentId === undefined ? {} : { parent: parentId }),
+  });
   if (!Array.isArray(data) || !data.every(isFolder)) {
     throw new Error("The folders API returned an invalid folder list.");
   }
@@ -93,13 +126,14 @@ export async function listDashboardFolders(): Promise<DashboardFolder[]> {
 export async function createDashboardFolder(data: {
   name: string;
   description: string;
+  parent: number | null;
 }): Promise<DashboardFolder> {
   const folder = await sendFolderCommand({
     type: "CREATE_FOLDER",
     data: {
       name: data.name,
       description: data.description,
-      parent: null,
+      parent: data.parent,
     },
   });
   if (!isFolder(folder)) {
@@ -115,7 +149,7 @@ export async function getDashboardFolder(
     type: "GET_FOLDER",
     folderId,
   });
-  if (!isFolder(folder)) {
+  if (!isFolderDetail(folder)) {
     throw new Error("The folders API returned invalid folder data.");
   }
   return folder;
@@ -132,4 +166,29 @@ export async function getDashboardFolderNotes(
     throw new Error("The folders API returned an invalid notes list.");
   }
   return data.map((note, index) => normalizeNote(note, index));
+}
+
+export async function renameDashboardFolder(
+  folderId: number,
+  name: string,
+): Promise<DashboardFolder> {
+  const folder = await sendFolderCommand({
+    type: "UPDATE_FOLDER",
+    folderId,
+    data: { name },
+  });
+  if (!isFolderDetail(folder)) {
+    throw new Error("The folders API returned invalid folder data.");
+  }
+  return folder;
+}
+
+export async function deleteDashboardFolder(folderId: number): Promise<void> {
+  const result = await sendFolderCommand({
+    type: "DELETE_FOLDER",
+    folderId,
+  });
+  if (result !== null) {
+    throw new Error("The folders API returned an invalid delete response.");
+  }
 }

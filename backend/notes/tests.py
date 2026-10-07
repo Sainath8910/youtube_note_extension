@@ -237,6 +237,10 @@ class NoteFolderOwnershipTests(TestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["folder"], self.folder.pk)
+        self.assertEqual(
+            response.data["folder_path"],
+            [{"id": self.folder.pk, "name": self.folder.name}],
+        )
         index_note.assert_called_once()
 
     @patch("notes.views.index_note")
@@ -328,9 +332,122 @@ class NoteFolderOwnershipTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["folder_path"], [])
         self.note.refresh_from_db()
         self.assertIsNone(self.note.folder)
         index_note.assert_called_once()
+        self.assertEqual(Note.objects.filter(pk=self.note.pk).count(), 1)
+
+    @patch("notes.views.index_note")
+    def test_patch_moves_note_between_owned_folders_without_duplication(
+        self,
+        index_note,
+    ):
+        destination = Folder.objects.create(
+            user=self.user,
+            name="Destination folder",
+        )
+
+        response = self.client.patch(
+            f"/api/notes/{self.note.pk}/",
+            {"folder": destination.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.note.refresh_from_db()
+        self.assertEqual(self.note.folder, destination)
+        self.assertEqual(
+            response.data["folder_path"],
+            [{"id": destination.pk, "name": destination.name}],
+        )
+        self.assertEqual(Note.objects.filter(user=self.user).count(), 1)
+        index_note.assert_called_once()
+
+    def test_note_folder_path_is_root_to_current_and_tracks_ancestor_rename(
+        self,
+    ):
+        java = Folder.objects.create(
+            user=self.user,
+            name="Java",
+            parent=self.folder,
+        )
+        collections = Folder.objects.create(
+            user=self.user,
+            name="Collections",
+            parent=java,
+        )
+        Note.objects.filter(pk=self.note.pk).update(folder=collections)
+
+        response = self.client.get("/api/notes/")
+        returned_note = next(
+            item for item in response.data if item["id"] == self.note.pk
+        )
+
+        self.assertEqual(
+            returned_note["folder_path"],
+            [
+                {"id": self.folder.pk, "name": "Own folder"},
+                {"id": java.pk, "name": "Java"},
+                {"id": collections.pk, "name": "Collections"},
+            ],
+        )
+
+        rename_response = self.client.patch(
+            f"/api/folders/{java.pk}/",
+            {"name": "Java Programming"},
+            format="json",
+        )
+
+        self.assertEqual(rename_response.status_code, 200)
+        refreshed_response = self.client.get("/api/notes/")
+        refreshed_note = next(
+            item
+            for item in refreshed_response.data
+            if item["id"] == self.note.pk
+        )
+        self.assertEqual(
+            refreshed_note["folder_path"],
+            [
+                {"id": self.folder.pk, "name": "Own folder"},
+                {"id": java.pk, "name": "Java Programming"},
+                {"id": collections.pk, "name": "Collections"},
+            ],
+        )
+
+    def test_folder_path_does_not_expose_foreign_owners_hierarchy(self):
+        Note.objects.filter(pk=self.note.pk).update(folder=self.foreign_folder)
+
+        response = self.client.get("/api/notes/")
+        returned_note = next(
+            item for item in response.data if item["id"] == self.note.pk
+        )
+
+        self.assertEqual(returned_note["folder"], self.foreign_folder.pk)
+        self.assertEqual(returned_note["folder_path"], [])
+        self.assertNotIn(self.foreign_folder.name, str(response.data))
+
+    @patch("notes.views.index_note")
+    def test_foreign_note_cannot_be_modified_through_patch(self, index_note):
+        foreign_note = Note.objects.create(
+            user=self.other_user,
+            title="Private note",
+            content="Private",
+            note_type=Note.NoteType.STANDALONE,
+            folder=self.foreign_folder,
+        )
+
+        response = self.client.patch(
+            f"/api/notes/{foreign_note.pk}/",
+            {"folder": self.folder.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 404)
+        foreign_note.refresh_from_db()
+        self.assertEqual(foreign_note.folder, self.foreign_folder)
+        self.assertEqual(Note.objects.filter(pk=foreign_note.pk).count(), 1)
+        index_note.assert_not_called()
 
     @patch("notes.views.index_note")
     def test_patch_omitting_folder_preserves_existing_association(
@@ -346,4 +463,5 @@ class NoteFolderOwnershipTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.note.refresh_from_db()
         self.assertEqual(self.note.folder, self.folder)
+        self.assertEqual(Note.objects.filter(pk=self.note.pk).count(), 1)
         index_note.assert_called_once()
