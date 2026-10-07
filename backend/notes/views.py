@@ -100,6 +100,7 @@ class NoteAssistanceView(APIView):
         try:
             proposal = create_improvement_proposal(
                 note=note,
+                user=request.user,
                 block_id=values["target"]["block_id"],
                 base_updated_at=values["base_updated_at"],
             )

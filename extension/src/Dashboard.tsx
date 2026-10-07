@@ -1316,8 +1316,7 @@ function NoteWorkspace({
     if (
       block.type !== "paragraph" &&
       block.type !== "heading" &&
-      block.type !== "equation" &&
-      block.type !== "timestamp"
+      block.type !== "equation"
     ) {
       return null;
     }
