@@ -66,6 +66,194 @@ chrome.action.onClicked.addListener(() => {
   });
 });
 
+interface ScreenshotCaptureRequest {
+  videoId: string;
+  timestampSeconds: number;
+  bounds: { x: number; y: number; width: number; height: number };
+  viewport: { width: number; height: number };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isScreenshotCaptureRequest(
+  value: unknown,
+): value is ScreenshotCaptureRequest {
+  if (!isRecord(value) || !isRecord(value.bounds) || !isRecord(value.viewport)) {
+    return false;
+  }
+  const bounds = value.bounds;
+  const viewport = value.viewport;
+  return (
+    typeof value.videoId === "string" &&
+    value.videoId.length > 0 &&
+    typeof value.timestampSeconds === "number" &&
+    Number.isFinite(value.timestampSeconds) &&
+    typeof bounds.x === "number" &&
+    Number.isFinite(bounds.x) &&
+    typeof bounds.y === "number" &&
+    Number.isFinite(bounds.y) &&
+    typeof bounds.width === "number" &&
+    Number.isFinite(bounds.width) &&
+    bounds.width > 0 &&
+    typeof bounds.height === "number" &&
+    Number.isFinite(bounds.height) &&
+    bounds.height > 0 &&
+    typeof viewport.width === "number" &&
+    Number.isFinite(viewport.width) &&
+    viewport.width > 0 &&
+    typeof viewport.height === "number" &&
+    Number.isFinite(viewport.height) &&
+    viewport.height > 0
+  );
+}
+
+function getWatchVideoId(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (
+      (url.hostname !== "www.youtube.com" && url.hostname !== "youtube.com") ||
+      url.pathname !== "/watch"
+    ) {
+      return null;
+    }
+    return url.searchParams.get("v");
+  } catch {
+    return null;
+  }
+}
+
+function captureVisibleTab(windowId: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.captureVisibleTab(
+      windowId,
+      { format: "jpeg", quality: 92 },
+      (image) => {
+        const error = chrome.runtime.lastError;
+        if (error) {
+          reject(
+            new Error(
+              "Chrome denied tab capture. Click the extension toolbar icon on this YouTube tab, return to the video, and retry.",
+            ),
+          );
+          return;
+        }
+        if (typeof image !== "string") {
+          reject(new Error("Chrome did not return a screenshot image."));
+          return;
+        }
+        resolve(image);
+      },
+    );
+  });
+}
+
+async function cropPlayerScreenshot(
+  capturedImage: string,
+  request: ScreenshotCaptureRequest,
+): Promise<string> {
+  const imageBlob = await (await fetch(capturedImage)).blob();
+  const bitmap = await createImageBitmap(imageBlob);
+  try {
+    const scaleX = bitmap.width / request.viewport.width;
+    const scaleY = bitmap.height / request.viewport.height;
+    const left = Math.max(0, Math.floor(request.bounds.x * scaleX));
+    const top = Math.max(0, Math.floor(request.bounds.y * scaleY));
+    const right = Math.min(
+      bitmap.width,
+      Math.ceil((request.bounds.x + request.bounds.width) * scaleX),
+    );
+    const bottom = Math.min(
+      bitmap.height,
+      Math.ceil((request.bounds.y + request.bounds.height) * scaleY),
+    );
+    const cropWidth = right - left;
+    const cropHeight = bottom - top;
+    if (cropWidth < 1 || cropHeight < 1) {
+      throw new Error("The player is outside the visible tab area.");
+    }
+
+    const outputScale = Math.min(1, 1600 / cropWidth);
+    const canvas = new OffscreenCanvas(
+      Math.max(1, Math.round(cropWidth * outputScale)),
+      Math.max(1, Math.round(cropHeight * outputScale)),
+    );
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Could not prepare the screenshot image.");
+    }
+    context.drawImage(
+      bitmap,
+      left,
+      top,
+      cropWidth,
+      cropHeight,
+      0,
+      0,
+      canvas.width,
+      canvas.height,
+    );
+
+    for (const quality of [0.82, 0.68, 0.54]) {
+      const blob = await canvas.convertToBlob({
+        type: "image/jpeg",
+        quality,
+      });
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let binary = "";
+      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+        binary += String.fromCharCode(
+          ...bytes.subarray(offset, offset + 0x8000),
+        );
+      }
+      const dataUrl = `data:image/jpeg;base64,${btoa(binary)}`;
+      if (dataUrl.length <= 2_500_000) return dataUrl;
+    }
+    throw new Error(
+      "The screenshot is too large to store safely in a note. Resize the player and retry.",
+    );
+  } finally {
+    bitmap.close();
+  }
+}
+
+async function capturePlayerForSender(
+  sender: chrome.runtime.MessageSender,
+  request: ScreenshotCaptureRequest,
+): Promise<string> {
+  const tabId = sender.tab?.id;
+  const windowId = sender.tab?.windowId;
+  if (
+    sender.frameId !== 0 ||
+    tabId === undefined ||
+    windowId === undefined ||
+    getWatchVideoId(sender.url) !== request.videoId
+  ) {
+    throw new Error("Screenshot capture is available only on the current YouTube watch page.");
+  }
+
+  const beforeCapture = await chrome.tabs.get(tabId);
+  if (!beforeCapture.active || beforeCapture.windowId !== windowId) {
+    throw new Error("Return to the YouTube video tab before capturing a screenshot.");
+  }
+  if (getWatchVideoId(beforeCapture.url) !== request.videoId) {
+    throw new Error("The active YouTube video changed. Try capturing again.");
+  }
+
+  const capturedImage = await captureVisibleTab(windowId);
+  const afterCapture = await chrome.tabs.get(tabId);
+  if (
+    !afterCapture.active ||
+    afterCapture.windowId !== windowId ||
+    getWatchVideoId(afterCapture.url) !== request.videoId
+  ) {
+    throw new Error("The active video changed during capture. No screenshot was inserted.");
+  }
+  return cropPlayerScreenshot(capturedImage, request);
+}
+
 async function respondToConversationRequest(
   path: string,
   method: "GET" | "POST" | "PATCH" | "DELETE",
@@ -162,7 +350,30 @@ async function respondToFolderRequest(
   }
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "CAPTURE_VIDEO_SCREENSHOT") {
+    if (!isScreenshotCaptureRequest(message)) {
+      sendResponse({
+        success: false,
+        error: "Screenshot capture details are invalid.",
+      });
+      return;
+    }
+    void capturePlayerForSender(sender, message)
+      .then((image) => sendResponse({ success: true, image }))
+      .catch((error: unknown) => {
+        console.error("[YouTube Knowledge] Video screenshot capture failed:", error);
+        sendResponse({
+          success: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Could not capture the video frame.",
+        });
+      });
+    return true;
+  }
+
   if (message.type === "SEARCH_FOLDERS") {
     if (typeof message.query !== "string") {
       sendResponse({

@@ -8,7 +8,8 @@ export type NoteBlockType =
   | "code"
   | "command"
   | "bullet_list"
-  | "numbered_list";
+  | "numbered_list"
+  | "screenshot";
 
 export interface NoteBlock {
   id: string;
@@ -16,7 +17,7 @@ export interface NoteBlock {
   content: string;
   [key: string]: unknown;
   metadata?: {
-    source?: "url" | "upload";
+    source?: "url" | "upload" | "youtube";
     url?: string;
     alt?: string;
     title?: string;
@@ -26,6 +27,8 @@ export interface NoteBlock {
     resource_type?: string;
     language?: string;
     shell?: string;
+    timestamp_seconds?: number;
+    image?: string;
     [key: string]: unknown;
   };
 }
@@ -145,6 +148,12 @@ export function documentToPlainText(noteDocument: NoteDocument): string {
         return block.metadata?.alt
           ? `[Image: ${block.metadata.alt}]`
           : "[Image]";
+      }
+
+      if (block.type === "screenshot") {
+        return typeof block.metadata?.timestamp_seconds === "number"
+          ? `[Video screenshot at ${block.metadata.timestamp_seconds}s]`
+          : "[Video screenshot]";
       }
 
       if (block.type === "url") {

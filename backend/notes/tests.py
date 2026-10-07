@@ -286,6 +286,16 @@ class NoteFolderOwnershipTests(TestCase):
                     "content": "https://example.com/image.png",
                     "metadata": {"alt": "Example"},
                 },
+                {
+                    "id": "screenshot-1",
+                    "type": "screenshot",
+                    "content": "",
+                    "metadata": {
+                        "source": "youtube",
+                        "timestamp_seconds": 155.25,
+                        "image": "data:image/jpeg;base64,c2NyZWVuc2hvdA==",
+                    },
+                },
             ],
         }
 
@@ -306,11 +316,19 @@ class NoteFolderOwnershipTests(TestCase):
         note_id = response.data["id"]
         self.assertEqual(response.data["document"], document)
 
+        update_response = self.client.patch(
+            f"/api/notes/{note_id}/",
+            {"document": document},
+            format="json",
+        )
+        self.assertEqual(update_response.status_code, 200)
+        self.assertEqual(update_response.data["document"], document)
+
         reload_response = self.client.get(f"/api/notes/{note_id}/")
 
         self.assertEqual(reload_response.status_code, 200)
         self.assertEqual(reload_response.data["document"], document)
-        index_note.assert_called_once()
+        self.assertEqual(index_note.call_count, 2)
 
     @patch("notes.views.index_note")
     def test_user_cannot_assign_foreign_folder_when_creating_note(

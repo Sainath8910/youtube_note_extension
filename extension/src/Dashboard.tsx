@@ -1184,7 +1184,8 @@ function supportedDocumentBlocks(note: VideoNote): NoteBlock[] {
         block.type === "code" ||
         block.type === "command" ||
         block.type === "bullet_list" ||
-        block.type === "numbered_list"),
+        block.type === "numbered_list" ||
+        block.type === "screenshot"),
   );
 }
 
@@ -1195,6 +1196,10 @@ function structuredDocumentText(note: VideoNote): string {
         return typeof block.metadata?.alt === "string"
           ? block.metadata.alt
           : "";
+      }
+
+      if (block.type === "screenshot") {
+        return "[Video screenshot]";
       }
 
       if (block.type === "url") {

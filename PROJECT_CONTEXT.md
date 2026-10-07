@@ -7,7 +7,7 @@
 - **Current status:** The repository contains working backend services, Django tests, and extension UI/API wiring, but is configured for local development (localhost backend, development-header authentication, Docker Compose services). The extension package's standalone `App.tsx` is still the Vite starter screen. No production deployment configuration or release documentation was found.
 - **Major features:**
   - Video metadata lookup and per-user video notes.
-  - Versioned rich-note documents with paragraph, heading, equation, timestamp, and image block types in the extension.
+  - Versioned rich-note documents with paragraph, heading, equation, timestamp, image, URL, code, command, bulleted/numbered list, and YouTube screenshot block types in the extension.
   - Transcript retrieval and transcript-based structured video analysis.
   - 1024-dimensional embeddings and PostgreSQL/pgvector semantic retrieval over note, transcript, and analysis chunks.
   - Grounded AI answers with returned source chunks.

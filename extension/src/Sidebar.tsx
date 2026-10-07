@@ -3,6 +3,7 @@ import {
   useCallback,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -14,6 +15,7 @@ import {
   ArrowLeft,
   ArrowUp,
   Brain,
+  Camera,
   Check,
   ChevronDown,
   ChevronRight,
@@ -57,6 +59,10 @@ import {
   type VideoNote,
 } from "./noteDocument";
 import { CopyButton } from "./CopyButton";
+import {
+  captureCurrentVideoScreenshot,
+  isCurrentVideoPlayerAvailable,
+} from "./videoScreenshot";
 export type {
   NoteBlock,
   NoteBlockType,
@@ -877,6 +883,7 @@ interface BlockEditorProps {
   noteDocument: NoteDocument;
   colors: ThemeColors;
   onChange: (document: NoteDocument) => void;
+  onCaptureScreenshot?: () => Promise<NoteBlock>;
   renderBlockAssistance?: (block: NoteBlock) => ReactNode;
   enableTimestampJump?: boolean;
   timestampContent?: () => string;
@@ -886,6 +893,7 @@ export function BlockEditor({
   noteDocument,
   colors,
   onChange,
+  onCaptureScreenshot,
   renderBlockAssistance,
   enableTimestampJump = true,
   timestampContent = () => formatTimestamp(getCurrentVideoTime()),
@@ -893,6 +901,11 @@ export function BlockEditor({
   const [draggedBlockId, setDraggedBlockId] = useState<string | null>(null);
 
   const [dragOverBlockId, setDragOverBlockId] = useState<string | null>(null);
+  const [isCapturingScreenshot, setIsCapturingScreenshot] = useState(false);
+  const [screenshotCaptureMessage, setScreenshotCaptureMessage] = useState<{
+    text: string;
+    isError: boolean;
+  } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -923,13 +936,7 @@ export function BlockEditor({
     });
   }
 
-  function addBlock(type: NoteBlockType, afterId?: string, content = "") {
-    const newBlock: NoteBlock = {
-      id: createId(),
-      type,
-      content,
-    };
-
+  function insertBlock(newBlock: NoteBlock, afterId?: string) {
     const blocks = [...noteDocument.blocks];
 
     if (!afterId) {
@@ -948,6 +955,49 @@ export function BlockEditor({
       ...noteDocument,
       blocks,
     });
+  }
+
+  function addBlock(type: NoteBlockType, afterId?: string, content = "") {
+    insertBlock(
+      {
+        id: createId(),
+        type,
+        content,
+      },
+      afterId,
+    );
+  }
+
+  async function captureScreenshot(afterId?: string) {
+    if (!onCaptureScreenshot || isCapturingScreenshot) return;
+    setIsCapturingScreenshot(true);
+    setScreenshotCaptureMessage({ text: "Capturing screenshot...", isError: false });
+    try {
+      const block = await onCaptureScreenshot();
+      if (
+        block.type !== "screenshot" ||
+        typeof block.metadata?.image !== "string" ||
+        !block.metadata.image.startsWith("data:image/jpeg;base64,")
+      ) {
+        throw new Error("The captured screenshot was not a valid image.");
+      }
+      insertBlock(block, afterId);
+      setScreenshotCaptureMessage({
+        text: "Screenshot captured.",
+        isError: false,
+      });
+      window.setTimeout(() => setScreenshotCaptureMessage(null), 2500);
+    } catch (captureError) {
+      setScreenshotCaptureMessage({
+        text:
+          captureError instanceof Error
+            ? captureError.message
+            : "Screenshot capture failed. Check that the YouTube player is visible and retry.",
+        isError: true,
+      });
+    } finally {
+      setIsCapturingScreenshot(false);
+    }
   }
 
   function moveBlock(blockId: string, direction: "up" | "down") {
@@ -1257,6 +1307,9 @@ export function BlockEditor({
                   <option value="timestamp">Timestamp</option>
 
                   <option value="image">Image</option>
+                  {block.type === "screenshot" && (
+                    <option value="screenshot">Video Screenshot</option>
+                  )}
                 </select>
               </div>
 
@@ -1462,6 +1515,40 @@ export function BlockEditor({
                   >
                     Replace uploaded image
                   </button>
+                )}
+              </div>
+            ) : block.type === "screenshot" ? (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                }}
+              >
+                {block.metadata?.image ? (
+                  <img
+                    src={block.metadata.image}
+                    alt="YouTube video screenshot"
+                    style={{
+                      width: "100%",
+                      maxWidth: 500,
+                      maxHeight: 300,
+                      objectFit: "contain",
+                      borderRadius: 8,
+                      background: colors.input,
+                      border: `1px solid ${colors.border}`,
+                    }}
+                  />
+                ) : (
+                  <div style={{ color: colors.muted, fontSize: 11 }}>
+                    Screenshot unavailable
+                  </div>
+                )}
+                {typeof block.metadata?.timestamp_seconds === "number" && (
+                  <span style={{ color: colors.muted, fontSize: 11 }}>
+                    Captured at{" "}
+                    {formatTimestamp(block.metadata.timestamp_seconds)}
+                  </span>
                 )}
               </div>
             ) : block.type === "url" ? (
@@ -1788,6 +1875,25 @@ export function BlockEditor({
                 <Plus size={12} aria-hidden="true" />
                 Image URL
               </button>
+
+              {onCaptureScreenshot && (
+                <button
+                  type="button"
+                  disabled={isCapturingScreenshot}
+                  onClick={() => void captureScreenshot(block.id)}
+                  style={{
+                    ...smallToolButton,
+                    color: colors.accent,
+                    borderColor: colors.border,
+                    opacity: isCapturingScreenshot ? 0.6 : 1,
+                  }}
+                >
+                  <Camera size={12} aria-hidden="true" />
+                  {isCapturingScreenshot
+                    ? "Capturing..."
+                    : "Capture Screenshot"}
+                </button>
+              )}
             </div>
             {renderBlockAssistance?.(block)}
           </div>
@@ -1811,6 +1917,20 @@ export function BlockEditor({
         <Plus size={12} aria-hidden="true" />
         Add block
       </button>
+      {screenshotCaptureMessage && (
+        <div
+          role={screenshotCaptureMessage.isError ? "alert" : "status"}
+          style={{
+            color: screenshotCaptureMessage.isError
+              ? colors.danger
+              : colors.accent,
+            fontSize: 11,
+            lineHeight: 1.5,
+          }}
+        >
+          {screenshotCaptureMessage.text}
+        </div>
+      )}
     </div>
   );
 }
@@ -1975,6 +2095,100 @@ export function NoteReader({
                     }}
                   >
                     {block.metadata.alt}
+                  </figcaption>
+                )}
+              </figure>
+            );
+          }
+
+          if (block.type === "screenshot") {
+            const screenshotImage =
+              block.metadata?.image || block.content || "";
+            const timestampSeconds =
+              typeof block.metadata?.timestamp_seconds === "number" &&
+              Number.isFinite(block.metadata.timestamp_seconds) &&
+              block.metadata.timestamp_seconds >= 0
+                ? block.metadata.timestamp_seconds
+                : null;
+
+            return (
+              <figure
+                key={block.id}
+                style={{
+                  margin: 0,
+                  maxWidth: "100%",
+                }}
+              >
+                {screenshotImage.startsWith("data:image/") ? (
+                  <img
+                    src={screenshotImage}
+                    alt={
+                      timestampSeconds === null
+                        ? "YouTube video screenshot"
+                        : `YouTube video screenshot at ${formatTimestamp(timestampSeconds)}`
+                    }
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      maxWidth: 720,
+                      maxHeight: 420,
+                      objectFit: "contain",
+                      borderRadius: 10,
+                      background: colors.surface,
+                      border: `1px solid ${colors.border}`,
+                    }}
+                  />
+                ) : (
+                  <div
+                    role="img"
+                    aria-label="Screenshot unavailable"
+                    style={{
+                      padding: 14,
+                      borderRadius: 10,
+                      border: `1px solid ${colors.border}`,
+                      background: colors.surface,
+                      color: colors.muted,
+                      fontSize: 12,
+                    }}
+                  >
+                    Screenshot unavailable
+                  </div>
+                )}
+                {timestampSeconds !== null && (
+                  <figcaption
+                    style={{
+                      marginTop: 6,
+                      color: colors.muted,
+                      fontSize: 11,
+                    }}
+                  >
+                    {formatTimestamp(timestampSeconds)}
+                    {(onTimestampClick || enableTimestampJump) && (
+                      <>
+                        {" · "}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (onTimestampClick) {
+                              onTimestampClick(timestampSeconds);
+                            } else {
+                              jumpToTimestamp(timestampSeconds);
+                            }
+                          }}
+                          style={{
+                            border: 0,
+                            padding: 0,
+                            background: "transparent",
+                            color: colors.accent,
+                            cursor: "pointer",
+                            font: "inherit",
+                            fontWeight: 700,
+                          }}
+                        >
+                          Open at {formatTimestamp(timestampSeconds)}
+                        </button>
+                      </>
+                    )}
                   </figcaption>
                 )}
               </figure>
@@ -2201,6 +2415,43 @@ function NoteWriter({
   const [isSaving, setIsSaving] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
+  const screenshotCaptureEligible =
+    note === null || (note.note_type === "VIDEO" && note.video != null);
+  const subscribeToScreenshotAvailability = useCallback(
+    (onStoreChange: () => void) => {
+      if (!screenshotCaptureEligible) return () => {};
+      const interval = window.setInterval(onStoreChange, 500);
+      return () => window.clearInterval(interval);
+    },
+    [screenshotCaptureEligible],
+  );
+  const getScreenshotAvailability = useCallback(
+    () =>
+      screenshotCaptureEligible && isCurrentVideoPlayerAvailable(videoId),
+    [screenshotCaptureEligible, videoId],
+  );
+  const canCaptureScreenshot = useSyncExternalStore(
+    subscribeToScreenshotAvailability,
+    getScreenshotAvailability,
+    () => false,
+  );
+
+  async function captureScreenshotBlock(): Promise<NoteBlock> {
+    if (getActiveYouTubeVideoId() !== videoId) {
+      throw new Error("The active YouTube video changed. Try capturing again.");
+    }
+    const captured = await captureCurrentVideoScreenshot(videoId);
+    return {
+      id: createId(),
+      type: "screenshot",
+      content: "",
+      metadata: {
+        source: "youtube",
+        timestamp_seconds: captured.timestampSeconds,
+        image: captured.image,
+      },
+    };
+  }
 
   useEffect(() => {
     setTitle(note?.title ?? "");
@@ -2347,6 +2598,7 @@ function NoteWriter({
         noteDocument={noteDocument}
         colors={colors}
         onChange={setNoteDocument}
+        onCaptureScreenshot={canCaptureScreenshot ? captureScreenshotBlock : undefined}
       />
 
       <div
