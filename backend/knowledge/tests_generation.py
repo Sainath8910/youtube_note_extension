@@ -10,6 +10,7 @@ from knowledge.services.generation import (
     RAGGenerationError,
     _GROUNDING_INSTRUCTIONS,
     _build_grounded_prompt,
+    generate_text,
     generate_rag_answer,
 )
 from knowledge.services.retrieval import RetrievalScope
@@ -225,3 +226,38 @@ class RAGAnswerGenerationTests(SimpleTestCase):
             kwargs["config"].system_instruction,
             _GROUNDING_INSTRUCTIONS,
         )
+
+    def test_generic_text_generation_uses_shared_provider_and_instructions(self):
+        provider = Mock()
+        provider.generate_text.return_value = "  Improved text.  "
+        system_instruction = "Return only the improved text."
+
+        with patch(
+            "knowledge.services.generation._get_default_provider",
+            return_value=provider,
+        ):
+            result = generate_text(
+                prompt='Selected text: "My note"',
+                system_instruction=system_instruction,
+            )
+
+        self.assertEqual(result, "Improved text.")
+        provider.generate_text.assert_called_once_with(
+            prompt='Selected text: "My note"',
+            system_instruction=system_instruction,
+        )
+
+    def test_generic_text_generation_rejects_invalid_provider_output(self):
+        for output in (None, "", " \n\t"):
+            with self.subTest(output=output):
+                provider = Mock()
+                provider.generate_text.return_value = output
+                with patch(
+                    "knowledge.services.generation._get_default_provider",
+                    return_value=provider,
+                ):
+                    with self.assertRaises(RAGGenerationError):
+                        generate_text(
+                            prompt="A prompt",
+                            system_instruction="A system instruction",
+                        )

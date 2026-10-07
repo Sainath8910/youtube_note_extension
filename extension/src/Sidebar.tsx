@@ -837,6 +837,7 @@ interface BlockEditorProps {
   noteDocument: NoteDocument;
   colors: ThemeColors;
   onChange: (document: NoteDocument) => void;
+  renderBlockAssistance?: (block: NoteBlock) => ReactNode;
   enableTimestampJump?: boolean;
   timestampContent?: () => string;
 }
@@ -845,6 +846,7 @@ export function BlockEditor({
   noteDocument,
   colors,
   onChange,
+  renderBlockAssistance,
   enableTimestampJump = true,
   timestampContent = () => formatTimestamp(getCurrentVideoTime()),
 }: BlockEditorProps) {
@@ -1526,6 +1528,7 @@ export function BlockEditor({
                 Image URL
               </button>
             </div>
+            {renderBlockAssistance?.(block)}
           </div>
         );
       })}

@@ -116,6 +116,79 @@ async function respondToConversationRequest(
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === "REQUEST_NOTE_ASSISTANCE") {
+    const noteId = message.noteId;
+    if (
+      typeof noteId !== "number" ||
+      !Number.isSafeInteger(noteId) ||
+      noteId < 1 ||
+      message.operation !== "improve" ||
+      typeof message.base_updated_at !== "string" ||
+      typeof message.target !== "object" ||
+      message.target === null ||
+      Array.isArray(message.target) ||
+      message.target.kind !== "block" ||
+      typeof message.target.block_id !== "string" ||
+      !message.target.block_id
+    ) {
+      sendResponse({
+        success: false,
+        status: 400,
+        data: { detail: "A valid note assistance request is required." },
+      });
+      return;
+    }
+
+    fetch(
+      `http://localhost:8000/api/notes/${encodeURIComponent(String(noteId))}/assistance/`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Dev-User": "devuser",
+        },
+        body: JSON.stringify({
+          operation: message.operation,
+          target: message.target,
+          base_updated_at: message.base_updated_at,
+        }),
+      },
+    )
+      .then(async (response) => {
+        const responseText = await response.text();
+        let data: unknown = null;
+        if (responseText) {
+          try {
+            data = JSON.parse(responseText);
+          } catch {
+            sendResponse({
+              success: false,
+              status: response.ok ? 502 : response.status,
+              data: null,
+            });
+            return;
+          }
+        }
+        sendResponse({
+          success: response.ok,
+          status: response.status,
+          data,
+        });
+      })
+      .catch((error) => {
+        console.error(
+          "[YouTube Knowledge] Note assistance request failed:",
+          error,
+        );
+        sendResponse({
+          success: false,
+          status: 0,
+          data: null,
+        });
+      });
+    return true;
+  }
+
   if (message.type === "LIST_CONVERSATIONS") {
     void respondToConversationRequest("", "GET", sendResponse);
     return true;

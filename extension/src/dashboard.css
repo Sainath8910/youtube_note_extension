@@ -2457,6 +2457,131 @@
   max-width: 100%;
 }
 
+.note-ai-assistance {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.note-ai-improve-button,
+.note-ai-accept-button,
+.note-ai-reject-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 6px 9px;
+  border: 1px solid #294655;
+  border-radius: 7px;
+  background: #10232d;
+  color: #9be8f4;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.note-ai-improve-button:hover:not(:disabled),
+.note-ai-accept-button:hover:not(:disabled) {
+  background: #16313e;
+}
+
+.note-ai-improve-button:disabled,
+.note-ai-accept-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.note-ai-assistance-hint {
+  margin: 0;
+  color: #91a4b7;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.note-ai-assistance-error {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0;
+  padding: 8px 9px;
+}
+
+.note-ai-assistance-error p {
+  font-size: 10px;
+}
+
+.note-ai-proposal {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px;
+  border: 1px solid rgba(103, 232, 249, 0.28);
+  border-radius: 8px;
+  background: rgba(18, 48, 58, 0.48);
+}
+
+.note-ai-proposal-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: #a5f3fc;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.note-ai-proposal-original,
+.note-ai-proposal-suggestion {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.note-ai-proposal-original strong,
+.note-ai-proposal-suggestion strong {
+  color: #94a3b8;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.note-ai-proposal-original span,
+.note-ai-proposal-suggestion span {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.note-ai-proposal-suggestion span {
+  color: #f1f5f9;
+}
+
+.note-ai-proposal-actions {
+  display: flex;
+  gap: 7px;
+}
+
+.note-ai-accept-button {
+  border-color: rgba(52, 211, 153, 0.35);
+  background: rgba(6, 78, 59, 0.35);
+  color: #a7f3d0;
+}
+
+.note-ai-reject-button {
+  border-color: #39485b;
+  background: #172131;
+  color: #cbd5e1;
+}
+
+.note-ai-reject-button:hover {
+  background: #202c3d;
+}
+
 .note-editor input::placeholder,
 .note-editor textarea::placeholder {
   color: #74849a;

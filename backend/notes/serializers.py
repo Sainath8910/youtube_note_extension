@@ -113,3 +113,50 @@ class NoteSerializer(serializers.ModelSerializer):
                 })
 
         return attrs
+
+
+class NoteAssistanceTargetSerializer(serializers.Serializer):
+    kind = serializers.CharField(required=True)
+    block_id = serializers.CharField(required=True, allow_blank=False)
+
+    def validate(self, attrs):
+        if attrs["kind"] != "block":
+            raise serializers.ValidationError(
+                {"kind": "Only block targets are supported."}
+            )
+        return attrs
+
+
+class NoteAssistanceRequestSerializer(serializers.Serializer):
+    operation = serializers.CharField(required=True)
+    target = NoteAssistanceTargetSerializer(required=True)
+    base_updated_at = serializers.DateTimeField(
+        required=True,
+        help_text=(
+            "ISO 8601 datetime copied from the note's updated_at field "
+            "(the API returns UTC)."
+        ),
+    )
+
+    def validate(self, attrs):
+        unexpected = set(self.initial_data) - {
+            "operation",
+            "target",
+            "base_updated_at",
+        }
+        if unexpected:
+            raise serializers.ValidationError(
+                "Unexpected request fields are not allowed."
+            )
+        target = self.initial_data.get("target")
+        if isinstance(target, dict):
+            unexpected_target_fields = set(target) - {"kind", "block_id"}
+            if unexpected_target_fields:
+                raise serializers.ValidationError(
+                    {"target": "Unexpected target fields are not allowed."}
+                )
+        if attrs["operation"] != "improve":
+            raise serializers.ValidationError(
+                {"operation": "Only the improve operation is supported."}
+            )
+        return attrs

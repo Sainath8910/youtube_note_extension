@@ -100,6 +100,17 @@ class GeminiGenerationProvider:
         self._client = None
 
     def generate(self, *, question: str, prompt: str) -> str:
+        return self.generate_text(
+            prompt=prompt,
+            system_instruction=_GROUNDING_INSTRUCTIONS,
+        )
+
+    def generate_text(
+        self,
+        *,
+        prompt: str,
+        system_instruction: str,
+    ) -> str:
         api_key = os.getenv("GEMINI_API_KEY", "").strip()
         if not api_key:
             raise RAGGenerationError(
@@ -125,7 +136,7 @@ class GeminiGenerationProvider:
                 model=model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    system_instruction=_GROUNDING_INSTRUCTIONS,
+                    system_instruction=system_instruction,
                 ),
             )
             return response.text
@@ -133,14 +144,46 @@ class GeminiGenerationProvider:
             raise
         except Exception as exc:
             raise RAGGenerationError(
-                "The Gemini answer-generation request failed."
+                "The Gemini text-generation request failed."
             ) from exc
 
 
 @lru_cache(maxsize=1)
-def _get_default_provider() -> GenerationProvider:
+def _get_default_provider() -> GeminiGenerationProvider:
     """Create the configured provider only when generation is requested."""
     return GeminiGenerationProvider()
+
+
+def generate_text(
+    *,
+    prompt: str,
+    system_instruction: str,
+) -> str:
+    """Generate validated text through the shared configured provider."""
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise RAGGenerationError("The generation prompt must not be empty.")
+    if not isinstance(system_instruction, str) or not system_instruction.strip():
+        raise RAGGenerationError(
+            "The generation system instruction must not be empty."
+        )
+
+    try:
+        answer = _get_default_provider().generate_text(
+            prompt=prompt,
+            system_instruction=system_instruction,
+        )
+    except RAGGenerationError:
+        raise
+    except Exception as exc:
+        raise RAGGenerationError(
+            "The text-generation provider failed."
+        ) from exc
+
+    if not isinstance(answer, str) or not answer.strip():
+        raise RAGGenerationError(
+            "The text-generation provider returned an empty or invalid response."
+        )
+    return answer.strip()
 
 
 def generate_rag_answer(

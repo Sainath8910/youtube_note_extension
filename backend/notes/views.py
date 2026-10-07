@@ -2,10 +2,11 @@
 import logging
 
 from django.db import transaction
-from rest_framework import generics
+from rest_framework import generics, status
+from rest_framework.exceptions import APIException, NotFound
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.exceptions import APIException
+from rest_framework.views import APIView
 
 from knowledge.services.indexing import index_note
 from videos.models import Video
@@ -17,7 +18,13 @@ from videos.services.youtube import (
 )
 
 from .models import Note
-from .serializers import NoteSerializer
+from .serializers import NoteAssistanceRequestSerializer, NoteSerializer
+from .services.assistance import (
+    NoteAssistanceError,
+    NoteAssistanceGenerationError,
+    StaleNoteError,
+    create_improvement_proposal,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -67,6 +74,55 @@ class NoteDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def perform_update(self, serializer):
         _save_and_index_note(serializer)
+
+
+class NoteAssistanceView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            note = Note.objects.get(pk=pk, user=request.user)
+        except Note.DoesNotExist:
+            raise NotFound("Note not found.") from None
+
+        serializer = NoteAssistanceRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {
+                    "detail": "The note assistance request is invalid.",
+                    "code": "invalid_request",
+                    "errors": serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        values = serializer.validated_data
+        try:
+            proposal = create_improvement_proposal(
+                note=note,
+                block_id=values["target"]["block_id"],
+                base_updated_at=values["base_updated_at"],
+            )
+        except StaleNoteError as error:
+            return Response(
+                {"detail": str(error), "code": "stale_note"},
+                status=status.HTTP_409_CONFLICT,
+            )
+        except NoteAssistanceError as error:
+            return Response(
+                {"detail": str(error), "code": error.code},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except NoteAssistanceGenerationError:
+            return Response(
+                {
+                    "detail": "AI assistance could not generate a proposal.",
+                    "code": "generation_failed",
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response(proposal, status=status.HTTP_200_OK)
 
 
 class VideoNoteCreateView(generics.CreateAPIView):

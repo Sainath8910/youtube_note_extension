@@ -12,6 +12,7 @@ import {
   Brain,
   BookOpen,
   Clapperboard,
+  Check,
   Clock3,
   ExternalLink,
   FileText,
@@ -63,6 +64,10 @@ import {
   type ConversationScope,
   type ConversationSource,
 } from "./conversationApi";
+import {
+  NoteAssistanceApiError,
+  requestNoteImprovement,
+} from "./noteAssistanceApi";
 import "./dashboard.css";
 
 type DashboardRoute =
@@ -1099,6 +1104,13 @@ function structuredDocumentText(note: VideoNote): string {
 
 type NoteWorkspaceMode = "read" | "write";
 
+interface NoteImprovementProposal {
+  baseUpdatedAt: string;
+  originalContent: string;
+  originalType: NoteBlock["type"];
+  suggestedContent: string;
+}
+
 const dashboardNoteColors: ThemeColors = {
   panel: "#0b1220",
   header: "#0f172a",
@@ -1187,6 +1199,16 @@ function NoteWorkspace({
   const [noteDocument, setNoteDocument] = useState(savedDocument);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [noteProposals, setNoteProposals] = useState<
+    Map<string, NoteImprovementProposal>
+  >(() => new Map());
+  const [assistanceLoadingIds, setAssistanceLoadingIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [assistanceErrors, setAssistanceErrors] = useState<
+    Map<string, string>
+  >(() => new Map());
+  const assistanceRequests = useRef(new Set<string>());
   const [thumbnailUnavailable, setThumbnailUnavailable] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const pageTitleRef = useRef<HTMLHeadingElement>(null);
@@ -1228,8 +1250,220 @@ function NoteWorkspace({
       setNoteDocument(savedDocument);
     }
     setSaveError(null);
+    setNoteProposals(new Map());
+    setAssistanceErrors(new Map());
     onDirtyChange(false);
     setMode("read");
+  };
+
+  const improveBlock = async (block: NoteBlock) => {
+    if (
+      isNew ||
+      !note ||
+      !note.updated_at ||
+      assistanceRequests.current.has(block.id)
+    ) {
+      return;
+    }
+
+    assistanceRequests.current.add(block.id);
+    setAssistanceLoadingIds((current) => new Set(current).add(block.id));
+    setAssistanceErrors((current) => {
+      const next = new Map(current);
+      next.delete(block.id);
+      return next;
+    });
+
+    try {
+      const proposal = await requestNoteImprovement(
+        note.id,
+        block.id,
+        note.updated_at,
+      );
+      setNoteProposals((current) => {
+        const next = new Map(current);
+        next.set(block.id, {
+          baseUpdatedAt: proposal.base_updated_at,
+          originalContent: block.content,
+          originalType: block.type,
+          suggestedContent: proposal.result.text,
+        });
+        return next;
+      });
+    } catch (error) {
+      const message =
+        error instanceof NoteAssistanceApiError
+          ? error.message
+          : error instanceof Error
+            ? error.message
+            : "AI assistance failed. Please try again.";
+      setAssistanceErrors((current) => {
+        const next = new Map(current);
+        next.set(block.id, message);
+        return next;
+      });
+    } finally {
+      assistanceRequests.current.delete(block.id);
+      setAssistanceLoadingIds((current) => {
+        const next = new Set(current);
+        next.delete(block.id);
+        return next;
+      });
+    }
+  };
+
+  const renderBlockAssistance = (block: NoteBlock) => {
+    if (
+      block.type !== "paragraph" &&
+      block.type !== "heading" &&
+      block.type !== "equation" &&
+      block.type !== "timestamp"
+    ) {
+      return null;
+    }
+
+    const persistedBlockMatches = Boolean(
+      note &&
+        !isNew &&
+        note.updated_at &&
+        savedDocument.blocks.filter(
+          (savedBlock) => savedBlock.id === block.id,
+        ).length === 1 &&
+        savedDocument.blocks.some(
+          (savedBlock) =>
+            savedBlock.id === block.id &&
+            savedBlock.type === block.type &&
+            savedBlock.content === block.content,
+        ),
+    );
+    const pending = assistanceLoadingIds.has(block.id);
+    const proposal = noteProposals.get(block.id);
+    const proposalVersionMatches =
+      proposal?.baseUpdatedAt === note?.updated_at;
+    const proposalMatchesCurrentBlock =
+      proposal?.originalContent === block.content &&
+      proposal.originalType === block.type &&
+      proposalVersionMatches;
+    const blockIdIsUnique =
+      noteDocument.blocks.filter(
+        (currentBlock) => currentBlock.id === block.id,
+      ).length === 1;
+    const canAccept =
+      Boolean(proposal && proposalMatchesCurrentBlock && blockIdIsUnique) &&
+      !pending;
+    const unsavedBlock =
+      !isNew && note !== null && !persistedBlockMatches;
+    const disabled =
+      isNew ||
+      !note?.updated_at ||
+      unsavedBlock ||
+      !blockIdIsUnique ||
+      !block.content.trim() ||
+      pending ||
+      isSaving;
+    const unavailableMessage = isNew
+      ? "Save this note before using AI assistance."
+      : unsavedBlock
+        ? "Save this note before using AI assistance."
+        : !blockIdIsUnique
+          ? "This block cannot be targeted because its ID is not unique."
+          : !block.content.trim()
+            ? "Add text to this block before using AI assistance."
+            : null;
+
+    return (
+      <div className="note-ai-assistance">
+        <button
+          className="note-ai-improve-button"
+          type="button"
+          disabled={disabled}
+          onClick={() => void improveBlock(block)}
+          aria-label={`Improve selected ${block.type} block`}
+        >
+          <Sparkles size={13} aria-hidden="true" />
+          {pending ? "Improving…" : "Improve"}
+        </button>
+        {unavailableMessage && (
+          <p className="note-ai-assistance-hint">{unavailableMessage}</p>
+        )}
+        {assistanceErrors.has(block.id) && (
+          <div className="workspace-save-error note-ai-assistance-error" role="alert">
+            <AlertCircle size={15} aria-hidden="true" />
+            <p>{assistanceErrors.get(block.id)}</p>
+          </div>
+        )}
+        {proposal && (
+          <section
+            className="note-ai-proposal"
+            aria-label={`AI suggestion for ${block.type} block`}
+          >
+            <p className="note-ai-proposal-label">
+              <Sparkles size={13} aria-hidden="true" />
+              AI suggestion
+            </p>
+            <p className="note-ai-proposal-original">
+              <strong>Original</strong>
+              <span>{proposal.originalContent}</span>
+            </p>
+            <p className="note-ai-proposal-suggestion">
+              <strong>Suggestion</strong>
+              <span>{proposal.suggestedContent}</span>
+            </p>
+            {!proposalMatchesCurrentBlock && (
+              <p className="note-ai-assistance-hint">
+                {proposalVersionMatches
+                  ? "This block changed after the suggestion was requested. Request a new suggestion before accepting."
+                  : "This note changed after the suggestion was requested. Refresh the note and try again."}
+              </p>
+            )}
+            <div className="note-ai-proposal-actions">
+              <button
+                className="note-ai-accept-button"
+                type="button"
+                disabled={!canAccept}
+                onClick={() => {
+                  if (!proposal || !canAccept) return;
+                  setNoteDocument((current) => ({
+                    ...current,
+                    blocks: current.blocks.map((currentBlock) =>
+                      currentBlock.id === block.id &&
+                      currentBlock.content === proposal.originalContent &&
+                      currentBlock.type === proposal.originalType
+                        ? {
+                            ...currentBlock,
+                            content: proposal.suggestedContent,
+                          }
+                        : currentBlock,
+                    ),
+                  }));
+                  setNoteProposals((current) => {
+                    const next = new Map(current);
+                    next.delete(block.id);
+                    return next;
+                  });
+                }}
+              >
+                <Check size={13} aria-hidden="true" />
+                Accept
+              </button>
+              <button
+                className="note-ai-reject-button"
+                type="button"
+                onClick={() => {
+                  setNoteProposals((current) => {
+                    const next = new Map(current);
+                    next.delete(block.id);
+                    return next;
+                  });
+                }}
+              >
+                Reject
+              </button>
+            </div>
+          </section>
+        )}
+      </div>
+    );
   };
 
   const saveNote = async () => {
@@ -1481,6 +1715,7 @@ function NoteWorkspace({
                   noteDocument={noteDocument}
                   colors={dashboardNoteColors}
                   onChange={setNoteDocument}
+                  renderBlockAssistance={renderBlockAssistance}
                   enableTimestampJump={false}
                   timestampContent={() => ""}
                 />
