@@ -5,6 +5,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from folders.models import Folder
+from knowledge.models import KnowledgeChunk
 from notes.models import Note
 from videos.models import Video
 from videos.services.youtube import YouTubeMetadataError
@@ -552,3 +553,88 @@ class NoteFolderOwnershipTests(TestCase):
         self.assertEqual(self.note.folder, self.folder)
         self.assertEqual(Note.objects.filter(pk=self.note.pk).count(), 1)
         index_note.assert_called_once()
+
+
+class NoteDeletionTests(TestCase):
+    def setUp(self):
+        user_model = get_user_model()
+        self.user = user_model.objects.create_user(username="note-delete-owner")
+        self.other_user = user_model.objects.create_user(
+            username="other-note-delete-owner",
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        self.folder = Folder.objects.create(user=self.user, name="Keep folder")
+        self.video = Video.objects.create(
+            youtube_id="delete12345",
+            title="Keep video",
+        )
+        self.note = Note.objects.create(
+            user=self.user,
+            title="Delete this note",
+            content="Note content",
+            document={"version": 1, "blocks": []},
+            note_type=Note.NoteType.VIDEO,
+            folder=self.folder,
+            video=self.video,
+        )
+
+    def test_owner_can_delete_note_without_deleting_folder_video_or_sibling(self):
+        sibling_note = Note.objects.create(
+            user=self.user,
+            title="Keep sibling note",
+            content="Sibling content",
+            document={"version": 1, "blocks": []},
+            note_type=Note.NoteType.VIDEO,
+            folder=self.folder,
+            video=self.video,
+        )
+
+        response = self.client.delete(f"/api/notes/{self.note.pk}/")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Note.objects.filter(pk=self.note.pk).exists())
+        self.assertTrue(Folder.objects.filter(pk=self.folder.pk).exists())
+        self.assertTrue(Video.objects.filter(pk=self.video.pk).exists())
+        self.assertTrue(Note.objects.filter(pk=sibling_note.pk).exists())
+
+    def test_deleting_note_cascades_its_knowledge_chunks(self):
+        chunk = KnowledgeChunk.objects.create(
+            user=self.user,
+            note=self.note,
+            content="Indexed note content",
+            content_type=KnowledgeChunk.ContentType.NOTE,
+            source_type=KnowledgeChunk.SourceType.NOTE,
+        )
+
+        response = self.client.delete(f"/api/notes/{self.note.pk}/")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(KnowledgeChunk.objects.filter(pk=chunk.pk).exists())
+
+    def test_user_cannot_delete_another_users_note(self):
+        foreign_note = Note.objects.create(
+            user=self.other_user,
+            title="Private note",
+            content="Private content",
+            document={"version": 1, "blocks": []},
+            note_type=Note.NoteType.STANDALONE,
+        )
+
+        response = self.client.delete(f"/api/notes/{foreign_note.pk}/")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(Note.objects.filter(pk=foreign_note.pk).exists())
+
+    def test_unauthenticated_user_cannot_delete_note(self):
+        response = APIClient().delete(f"/api/notes/{self.note.pk}/")
+
+        self.assertIn(response.status_code, (401, 403))
+        self.assertTrue(Note.objects.filter(pk=self.note.pk).exists())
+
+    def test_repeated_delete_returns_not_found(self):
+        first_response = self.client.delete(f"/api/notes/{self.note.pk}/")
+        second_response = self.client.delete(f"/api/notes/{self.note.pk}/")
+
+        self.assertEqual(first_response.status_code, 204)
+        self.assertEqual(second_response.status_code, 404)

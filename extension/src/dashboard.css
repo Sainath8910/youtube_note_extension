@@ -2354,6 +2354,92 @@
   margin-top: 14px;
 }
 
+.workspace-heading-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.workspace-delete-button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.2);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.workspace-delete-button:hover:not(:disabled) {
+  background: rgba(127, 29, 29, 0.38);
+  border-color: rgba(248, 113, 113, 0.55);
+}
+
+.workspace-delete-button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.note-delete-backdrop {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(3, 8, 15, 0.78);
+  backdrop-filter: blur(5px);
+}
+
+.note-delete-dialog {
+  display: grid;
+  width: min(100%, 440px);
+  gap: 13px;
+  padding: 19px;
+  color: var(--text-primary);
+  background: #0d1726;
+  border: 1px solid #2a3a4e;
+  border-radius: 14px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48);
+}
+
+.note-delete-dialog .eyebrow {
+  margin: 0 0 5px;
+  color: #d68d92;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.note-delete-dialog h2 {
+  margin: 0;
+  color: #fee2e2;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.note-delete-dialog > p {
+  margin: 0;
+  color: #bdc9d7;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.note-delete-dialog .folder-form-actions {
+  margin-top: 2px;
+}
+
 .workspace-video-context {
   display: flex;
   align-items: center;
@@ -3600,7 +3686,7 @@
     gap: 2px 12px;
   }
 
-  .workspace-save-button {
+  .workspace-heading-actions {
     align-self: flex-end;
   }
 

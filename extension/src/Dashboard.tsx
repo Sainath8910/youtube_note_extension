@@ -14,6 +14,7 @@ import {
   Clapperboard,
   Check,
   Clock3,
+  Download,
   ExternalLink,
   FileText,
   Folder,
@@ -25,6 +26,7 @@ import {
   Search,
   Save,
   Sparkles,
+  Trash2,
   Video,
   X,
 } from "lucide-react";
@@ -39,10 +41,13 @@ import {
   getListItems,
   normalizeDocument,
   type NoteBlock,
+  type NoteDocument,
   type VideoNote,
 } from "./noteDocument";
 import {
   createStandaloneDashboardNote,
+  DashboardNoteNotFoundError,
+  deleteDashboardNote,
   loadDashboardData,
   updateDashboardNoteFolder,
   updateDashboardNote,
@@ -63,6 +68,10 @@ import {
   type DashboardFolderSearchResult,
 } from "./folderApi";
 import { FolderOrganizerDialog } from "./FolderOrganizerDialog";
+import {
+  exportNoteAsMarkdown,
+  exportNoteToHtml,
+} from "./noteExport";
 import {
   type AskRAGScope,
 } from "./ragApi";
@@ -331,6 +340,7 @@ function Dashboard() {
     unsavedChangesRef.current = false;
 
     const previousDashboardHash = noteWorkspaceBackHashRef.current;
+    noteWorkspaceBackHashRef.current = null;
     if (previousDashboardHash && isKnownDashboardHash(previousDashboardHash)) {
       window.history.back();
       return;
@@ -415,6 +425,12 @@ function Dashboard() {
         location={workspaceLocation}
         note={workspaceNote}
         onBackToNotes={navigateBackFromNote}
+        onDeleted={(noteId) => {
+          savedNoteOverridesRef.current.delete(noteId);
+          unsavedChangesRef.current = false;
+          refreshDashboard();
+          navigateBackFromNote();
+        }}
         onDirtyChange={(dirty) => {
           unsavedChangesRef.current = dirty;
         }}
@@ -1248,6 +1264,7 @@ interface NoteWorkspaceProps {
   location: Exclude<NoteWorkspaceLocation, null>;
   note: DashboardNote | null;
   onBackToNotes: () => void;
+  onDeleted: (noteId: number) => void;
   onDirtyChange: (dirty: boolean) => void;
   onSaved: (note: DashboardNote) => void;
   onFolderUpdated: (note: DashboardNote) => void;
@@ -1304,6 +1321,7 @@ function NoteWorkspace({
   location,
   note,
   onBackToNotes,
+  onDeleted,
   onDirtyChange,
   onSaved,
   onFolderUpdated,
@@ -1319,6 +1337,9 @@ function NoteWorkspace({
   const [noteDocument, setNoteDocument] = useState(savedDocument);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [isDeleteConfirmationOpen, setIsDeleteConfirmationOpen] =
+    useState(false);
+  const [isDeletingNote, setIsDeletingNote] = useState(false);
   const [isOrganizerOpen, setIsOrganizerOpen] = useState(false);
   const [newNoteFolder, setNewNoteFolder] = useState<DashboardFolder | null>(
     null,
@@ -1333,9 +1354,13 @@ function NoteWorkspace({
     Map<string, string>
   >(() => new Map());
   const assistanceRequests = useRef(new Set<string>());
+  const deleteRequestInFlight = useRef(false);
   const [thumbnailUnavailable, setThumbnailUnavailable] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const pageTitleRef = useRef<HTMLHeadingElement>(null);
+  const deleteButtonRef = useRef<HTMLButtonElement>(null);
+  const cancelDeleteButtonRef = useRef<HTMLButtonElement>(null);
+  const confirmDeleteButtonRef = useRef<HTMLButtonElement>(null);
 
   const serializedDocument = JSON.stringify(noteDocument);
   const serializedSavedDocument = JSON.stringify(savedDocument);
@@ -1361,6 +1386,38 @@ function NoteWorkspace({
       pageTitleRef.current?.focus();
     }
   }, [mode]);
+
+  useEffect(() => {
+    if (!isDeleteConfirmationOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !isDeletingNote) {
+        setIsDeleteConfirmationOpen(false);
+        deleteButtonRef.current?.focus();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const cancelButton = cancelDeleteButtonRef.current;
+      const confirmButton = confirmDeleteButtonRef.current;
+      if (!cancelButton || !confirmButton) return;
+
+      if (event.shiftKey && document.activeElement === cancelButton) {
+        event.preventDefault();
+        confirmButton.focus();
+      } else if (
+        !event.shiftKey &&
+        document.activeElement === confirmButton
+      ) {
+        event.preventDefault();
+        cancelButton.focus();
+      }
+    };
+
+    cancelDeleteButtonRef.current?.focus();
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isDeleteConfirmationOpen, isDeletingNote]);
 
   const discardAndSwitchToRead = () => {
     if (
@@ -1641,6 +1698,189 @@ function NoteWorkspace({
     }
   };
 
+  const getExportSource = (): VideoNote | NoteDocument | null => {
+    setSaveError(null);
+
+    if (
+      !isNew &&
+      (!note?.document ||
+        note.document.version !== 1 ||
+        !Array.isArray(note.document.blocks))
+    ) {
+      setSaveError(
+        "This note does not have a valid structured document to export.",
+      );
+      return null;
+    }
+
+    return note
+      ? { ...note, title, document: noteDocument }
+      : noteDocument;
+  };
+
+  const downloadExport = (
+    content: string,
+    mimeType: string,
+    extension: ".md" | ".html",
+  ) => {
+    const blob = new Blob([content], { type: mimeType });
+    const objectUrl = URL.createObjectURL(blob);
+    let anchor: HTMLAnchorElement | null = null;
+    try {
+      anchor = window.document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = exportFilename(title, extension);
+      anchor.hidden = true;
+      window.document.body.append(anchor);
+      anchor.click();
+    } finally {
+      anchor?.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    }
+  };
+
+  const exportMarkdown = () => {
+    const source = getExportSource();
+    if (!source) return;
+
+    try {
+      downloadExport(
+        exportNoteAsMarkdown(source),
+        "text/markdown;charset=utf-8",
+        ".md",
+      );
+    } catch (error) {
+      setSaveError(
+        error instanceof Error
+          ? `Could not export this note: ${error.message}`
+          : "Could not export this note.",
+      );
+    }
+  };
+
+  const exportHtml = () => {
+    const source = getExportSource();
+    if (!source) return;
+
+    try {
+      downloadExport(
+        exportNoteToHtml(source),
+        "text/html;charset=utf-8",
+        ".html",
+      );
+    } catch (error) {
+      setSaveError(
+        error instanceof Error
+          ? `Could not export this note as HTML: ${error.message}`
+          : "Could not export this note as HTML.",
+      );
+    }
+  };
+
+  const exportPdf = () => {
+    const source = getExportSource();
+    if (!source) return;
+
+    let objectUrl: string | null = null;
+    let printWindow: Window | null = null;
+    try {
+      const html = exportNoteToHtml(source);
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      objectUrl = URL.createObjectURL(blob);
+      printWindow = window.open("about:blank", "_blank");
+      if (!printWindow) {
+        throw new Error("The print window was blocked by the browser.");
+      }
+
+      const printDocument = printWindow;
+      const printUrl = objectUrl;
+      printDocument.opener = null;
+      let cleanedUp = false;
+      const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        URL.revokeObjectURL(printUrl);
+      };
+
+      printDocument.addEventListener(
+        "afterprint",
+        () => {
+          cleanup();
+          printDocument.close();
+        },
+        { once: true },
+      );
+      printDocument.addEventListener(
+        "error",
+        () => {
+          cleanup();
+          setSaveError("Could not load the note for PDF printing.");
+        },
+        { once: true },
+      );
+      printDocument.addEventListener(
+        "load",
+        () => {
+          printDocument.addEventListener("beforeunload", cleanup, {
+            once: true,
+          });
+          try {
+            printDocument.focus();
+            printDocument.print();
+          } catch (error) {
+            cleanup();
+            printDocument.close();
+            setSaveError(
+              error instanceof Error
+                ? `Could not open the PDF print dialog: ${error.message}`
+                : "Could not open the PDF print dialog.",
+            );
+          }
+        },
+        { once: true },
+      );
+      printDocument.location.href = printUrl;
+      setSaveError(null);
+    } catch (error) {
+      if (printWindow && !printWindow.closed) {
+        printWindow.close();
+      }
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+      setSaveError(
+        error instanceof Error
+          ? `Could not prepare PDF printing: ${error.message}`
+          : "Could not prepare PDF printing.",
+      );
+    }
+  };
+
+  const confirmDeleteNote = async () => {
+    if (!note || isNew || deleteRequestInFlight.current) return;
+
+    deleteRequestInFlight.current = true;
+    setIsDeletingNote(true);
+    setSaveError(null);
+    try {
+      await deleteDashboardNote(note.id);
+      onDeleted(note.id);
+    } catch (error) {
+      if (error instanceof DashboardNoteNotFoundError) {
+        onDeleted(note.id);
+        return;
+      }
+      setIsDeleteConfirmationOpen(false);
+      setSaveError(
+        error instanceof Error
+          ? `Could not delete this note: ${error.message}`
+          : "Could not delete this note.",
+      );
+      deleteRequestInFlight.current = false;
+      setIsDeletingNote(false);
+    }
+  };
+
   const pageHeading =
     isNew ? "New standalone note" : note?.title || "Note workspace";
   const updatedDate = note ? formatNoteDate(note.updated_at) : null;
@@ -1750,17 +1990,58 @@ function NoteWorkspace({
                 </div>
               )}
             </div>
-            {mode === "write" && (
+            <div className="workspace-heading-actions">
               <button
-                className="workspace-save-button"
+                className="workspace-secondary-button"
                 type="button"
-                onClick={() => void saveNote()}
-                disabled={isSaving}
+                onClick={exportMarkdown}
               >
-                <Save size={16} aria-hidden="true" />
-                {isSaving ? "Saving…" : "Save note"}
+                <Download size={15} aria-hidden="true" />
+                Export Markdown
               </button>
-            )}
+              <button
+                className="workspace-secondary-button"
+                type="button"
+                onClick={exportHtml}
+              >
+                <Download size={15} aria-hidden="true" />
+                Export HTML
+              </button>
+              <button
+                className="workspace-secondary-button"
+                type="button"
+                onClick={exportPdf}
+              >
+                <Download size={15} aria-hidden="true" />
+                Export PDF
+              </button>
+              {note && (
+                <button
+                  ref={deleteButtonRef}
+                  className="workspace-delete-button"
+                  type="button"
+                  onClick={() => {
+                    setSaveError(null);
+                    setIsDeleteConfirmationOpen(true);
+                  }}
+                  disabled={isSaving || isDeletingNote}
+                >
+                  <Trash2 size={15} aria-hidden="true" />
+                  Delete
+                </button>
+              )}
+              {mode === "write" && (
+                <button
+                  className="workspace-save-button"
+                  type="button"
+                  onClick={() => void saveNote()}
+                  disabled={isSaving}
+                >
+                  <Save size={16} aria-hidden="true" />
+                  {isSaving ? "Saving…" : "Save note"}
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="note-folder-organize-row">
@@ -1946,6 +2227,47 @@ function NoteWorkspace({
           ) : null}
         </section>
       </div>
+      {isDeleteConfirmationOpen && note && (
+        <div className="note-delete-backdrop">
+          <section
+            className="note-delete-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="note-delete-title"
+            aria-describedby="note-delete-description"
+          >
+            <div>
+              <p className="eyebrow">DELETE NOTE</p>
+              <h2 id="note-delete-title">Delete this note?</h2>
+            </div>
+            <p id="note-delete-description">
+              “{note.title.trim() || "Untitled note"}” will be permanently
+              deleted. This cannot be undone.
+            </p>
+            <div className="folder-form-actions">
+              <button
+                ref={cancelDeleteButtonRef}
+                className="workspace-secondary-button"
+                type="button"
+                onClick={() => setIsDeleteConfirmationOpen(false)}
+                disabled={isDeletingNote}
+              >
+                Cancel
+              </button>
+              <button
+                ref={confirmDeleteButtonRef}
+                className="folder-delete-button"
+                type="button"
+                onClick={() => void confirmDeleteNote()}
+                disabled={isDeletingNote}
+              >
+                <Trash2 size={14} aria-hidden="true" />
+                {isDeletingNote ? "Deleting…" : "Delete note"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </main>
   );
 }
@@ -1986,6 +2308,17 @@ function formatNoteDate(value?: string): string | null {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(timestamp);
+}
+
+function exportFilename(title: string, extension: ".md" | ".html"): string {
+  const safeBaseName = title
+    .replace(/[<>:"/\\|?*]/g, "-")
+    .trim()
+    .replace(/[. ]+$/g, "")
+    .replace(/\.(?:md|html?)$/i, "")
+    .trim()
+    .replace(/[. ]+$/g, "");
+  return `${safeBaseName || "note"}${extension}`;
 }
 
 function NotesListState({

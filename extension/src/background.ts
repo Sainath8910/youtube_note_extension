@@ -1293,6 +1293,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
+    let responseStatus: number | undefined;
     fetch(`http://localhost:8000/api/notes/${noteId}/`, {
       method: "DELETE",
       headers: {
@@ -1300,6 +1301,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       },
     })
       .then(async (response) => {
+        responseStatus = response.status;
         if (!response.ok) {
           const responseText = await response.text();
           let errorMessage = responseText;
@@ -1328,6 +1330,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           success: false,
           error:
             error instanceof Error ? error.message : "Failed to delete note.",
+          ...(responseStatus === undefined ? {} : { status: responseStatus }),
         });
       });
 

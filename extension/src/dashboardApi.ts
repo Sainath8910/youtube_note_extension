@@ -183,18 +183,45 @@ function sendNoteCommand(
         return;
       }
       if (!response.success) {
-        reject(
-          new Error(
-            typeof response.error === "string"
-              ? response.error
-              : "Could not save the note.",
-          ),
+        const error = new Error(
+          typeof response.error === "string"
+            ? response.error
+            : "Could not complete the note request.",
         );
+        if (typeof response.status === "number") {
+          Object.assign(error, { status: response.status });
+        }
+        reject(error);
         return;
       }
       resolve(response.data);
     });
   });
+}
+
+export class DashboardNoteNotFoundError extends Error {
+  constructor() {
+    super("This note may already have been deleted.");
+    this.name = "DashboardNoteNotFoundError";
+  }
+}
+
+export async function deleteDashboardNote(noteId: number): Promise<void> {
+  try {
+    await sendNoteCommand({
+      type: "DELETE_NOTE",
+      noteId,
+    });
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "status" in error &&
+      error.status === 404
+    ) {
+      throw new DashboardNoteNotFoundError();
+    }
+    throw error;
+  }
 }
 
 export async function updateDashboardNote(
