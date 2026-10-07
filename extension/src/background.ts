@@ -817,10 +817,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
    * --------------------------------------------------
    */
   if (message.type === "GET_NOTES") {
-    fetch("http://localhost:8000/api/notes/", {
-      method: "GET",
-      headers: {
-        "X-Dev-User": "devuser",
+     const notesUrl = new URL("http://localhost:8000/api/notes/");
+     if (message.page !== undefined) {
+       if (
+         typeof message.page !== "number" ||
+         !Number.isInteger(message.page) ||
+         message.page < 1
+       ) {
+         sendResponse({
+           success: false,
+           error: "The requested notes page is invalid.",
+         });
+         return;
+       }
+
+       notesUrl.searchParams.set("page", String(message.page));
+       if (typeof message.search === "string") {
+         notesUrl.searchParams.set("search", message.search);
+       }
+       if (typeof message.noteType === "string") {
+         notesUrl.searchParams.set("note_type", message.noteType);
+       }
+       if (typeof message.sortOrder === "string") {
+         notesUrl.searchParams.set("ordering", message.sortOrder);
+       }
+     }
+
+     fetch(notesUrl.toString(), {
+       method: "GET",
+       headers: {
+         "X-Dev-User": "devuser",
       },
     })
       .then(async (response) => {

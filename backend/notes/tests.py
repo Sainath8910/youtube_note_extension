@@ -1,7 +1,9 @@
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from folders.models import Folder
@@ -638,3 +640,159 @@ class NoteDeletionTests(TestCase):
 
         self.assertEqual(first_response.status_code, 204)
         self.assertEqual(second_response.status_code, 404)
+
+
+class NoteListPaginationTests(TestCase):
+    def setUp(self):
+        user_model = get_user_model()
+        self.user = user_model.objects.create_user(username="note-page-owner")
+        self.other_user = user_model.objects.create_user(
+            username="other-note-page-owner",
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+
+    def create_note(
+        self,
+        title,
+        *,
+        content="",
+        document=None,
+        note_type=Note.NoteType.STANDALONE,
+        user=None,
+    ):
+        return Note.objects.create(
+            user=user or self.user,
+            title=title,
+            content=content,
+            document=document or {"version": 1, "blocks": []},
+            note_type=note_type,
+        )
+
+    def test_page_size_and_page_metadata_are_returned(self):
+        notes = [self.create_note(f"Note {index}") for index in range(23)]
+
+        first_page = self.client.get("/api/notes/?page=1")
+        second_page = self.client.get("/api/notes/?page=2")
+
+        self.assertEqual(first_page.status_code, 200)
+        self.assertEqual(first_page.data["count"], 23)
+        self.assertEqual(first_page.data["page"], 1)
+        self.assertEqual(first_page.data["page_size"], 20)
+        self.assertEqual(len(first_page.data["results"]), 20)
+        self.assertEqual(second_page.data["page"], 2)
+        self.assertEqual(len(second_page.data["results"]), 3)
+        first_ids = {item["id"] for item in first_page.data["results"]}
+        second_ids = {item["id"] for item in second_page.data["results"]}
+        self.assertEqual(first_ids | second_ids, {note.id for note in notes})
+        self.assertFalse(first_ids & second_ids)
+
+    def test_search_matches_structured_document_across_all_notes(self):
+        for index in range(22):
+            self.create_note(f"Unrelated {index}")
+        matching_note = self.create_note(
+            "Another title",
+            document={
+                "version": 1,
+                "blocks": [
+                    {
+                        "id": "match",
+                        "type": "paragraph",
+                        "content": "structured-only-needle",
+                    },
+                ],
+            },
+        )
+
+        response = self.client.get(
+            "/api/notes/?page=1&search=structured-only-needle",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(
+            response.data["results"][0]["id"],
+            matching_note.id,
+        )
+
+    def test_type_filter_and_ordering_are_applied_before_pagination(self):
+        standalone_notes = [
+            self.create_note(f"Standalone {index}")
+            for index in range(3)
+        ]
+        for index in range(22):
+            self.create_note(
+                f"Video {index}",
+                note_type=Note.NoteType.VIDEO,
+            )
+
+        response = self.client.get(
+            "/api/notes/?page=1&note_type=STANDALONE&ordering=created-asc",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 3)
+        self.assertEqual(
+            [item["id"] for item in response.data["results"]],
+            [note.id for note in standalone_notes],
+        )
+
+    def test_sorting_is_applied_before_page_slice(self):
+        notes = [self.create_note(f"Note {index}") for index in range(23)]
+        base_time = timezone.now()
+        for index, note in enumerate(notes):
+            Note.objects.filter(pk=note.pk).update(
+                created_at=base_time + timedelta(seconds=index),
+            )
+
+        response = self.client.get(
+            "/api/notes/?page=1&ordering=created-desc",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [item["id"] for item in response.data["results"]],
+            [note.id for note in reversed(notes[3:])],
+        )
+
+    def test_search_and_type_filter_can_be_combined(self):
+        self.create_note(
+            "Target",
+            content="filter-needle",
+            note_type=Note.NoteType.VIDEO,
+        )
+        self.create_note(
+            "Target standalone",
+            content="filter-needle",
+            note_type=Note.NoteType.STANDALONE,
+        )
+
+        response = self.client.get(
+            "/api/notes/?page=1&search=filter-needle&note_type=VIDEO",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["note_type"], "VIDEO")
+
+    def test_out_of_range_page_recovers_to_last_page_and_is_user_scoped(self):
+        for index in range(21):
+            self.create_note(f"Own {index}")
+        self.create_note("Foreign note", user=self.other_user)
+
+        response = self.client.get("/api/notes/?page=999")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 21)
+        self.assertEqual(response.data["page"], 2)
+        self.assertEqual(len(response.data["results"]), 1)
+        self.assertNotIn("Foreign note", str(response.data))
+
+    def test_invalid_filters_are_rejected(self):
+        invalid_type = self.client.get("/api/notes/?page=1&note_type=UNKNOWN")
+        invalid_ordering = self.client.get(
+            "/api/notes/?page=1&ordering=title",
+        )
+
+        self.assertEqual(invalid_type.status_code, 400)
+        self.assertEqual(invalid_ordering.status_code, 400)

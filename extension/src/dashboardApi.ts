@@ -34,6 +34,28 @@ export interface DashboardData {
   recentNotes: DashboardNote[];
 }
 
+export type DashboardNoteSortOrder =
+  | "updated-desc"
+  | "created-desc"
+  | "updated-asc"
+  | "created-asc";
+
+export type DashboardNoteTypeFilter = "ALL" | "VIDEO" | "STANDALONE";
+
+export interface DashboardNotesPageQuery {
+  page: number;
+  search: string;
+  noteType: DashboardNoteTypeFilter;
+  sortOrder: DashboardNoteSortOrder;
+}
+
+export interface DashboardNotesPage {
+  notes: DashboardNote[];
+  count: number;
+  page: number;
+  pageSize: number;
+}
+
 let inFlightDashboardRequest: Promise<DashboardData> | null = null;
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -290,7 +312,9 @@ function parseNotesResponse(data: unknown): DashboardNote[] {
   return data.map(normalizeNote);
 }
 
-function requestNotes(): Promise<DashboardNote[]> {
+function requestNotesResponse(
+  query?: DashboardNotesPageQuery,
+): Promise<unknown> {
   return new Promise((resolve, reject) => {
     if (typeof chrome === "undefined" || !chrome.runtime?.id) {
       reject(
@@ -302,7 +326,15 @@ function requestNotes(): Promise<DashboardNote[]> {
     }
 
     chrome.runtime.sendMessage(
-      { type: "GET_NOTES" },
+      {
+        type: "GET_NOTES",
+        ...(query && {
+          page: query.page,
+          search: query.search,
+          noteType: query.noteType,
+          sortOrder: query.sortOrder,
+        }),
+      },
       (response: unknown) => {
         const runtimeError = chrome.runtime.lastError;
         if (runtimeError) {
@@ -326,17 +358,42 @@ function requestNotes(): Promise<DashboardNote[]> {
           return;
         }
 
-        try {
-          resolve(parseNotesResponse(response.data));
-        } catch (error) {
-          reject(
-            error instanceof Error
-              ? error
-              : new Error("The notes service returned invalid note data."),
-          );
-        }
+        resolve(response.data);
       },
     );
+  });
+}
+
+function requestNotes(): Promise<DashboardNote[]> {
+  return requestNotesResponse().then(parseNotesResponse);
+}
+
+export function loadDashboardNotesPage(
+  query: DashboardNotesPageQuery,
+): Promise<DashboardNotesPage> {
+  return requestNotesResponse(query).then((data) => {
+    if (
+      !isObject(data) ||
+      !Array.isArray(data.results) ||
+      typeof data.count !== "number" ||
+      !Number.isInteger(data.count) ||
+      data.count < 0 ||
+      typeof data.page !== "number" ||
+      !Number.isInteger(data.page) ||
+      data.page < 1 ||
+      typeof data.page_size !== "number" ||
+      !Number.isInteger(data.page_size) ||
+      data.page_size < 1
+    ) {
+      throw new Error("The notes service returned an invalid notes page.");
+    }
+
+    return {
+      notes: data.results.map(normalizeNote),
+      count: data.count,
+      page: data.page,
+      pageSize: data.page_size,
+    };
   });
 }
 

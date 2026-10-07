@@ -13,6 +13,7 @@ import {
   BookOpen,
   Clapperboard,
   Check,
+  ChevronDown,
   Clock3,
   Download,
   ExternalLink,
@@ -48,6 +49,7 @@ import {
   createStandaloneDashboardNote,
   DashboardNoteNotFoundError,
   deleteDashboardNote,
+  loadDashboardNotesPage,
   loadDashboardData,
   updateDashboardNoteFolder,
   updateDashboardNote,
@@ -215,9 +217,12 @@ function Dashboard() {
   const route = location.route;
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [noteType, setNoteType] = useState<NoteTypeFilter>("ALL");
-  const [sortOrder, setSortOrder] = useState<NoteSortOrder>("updated-desc");
+  const [notesSearchQuery, setNotesSearchQuery] = useState("");
+  const [notesTypeFilter, setNotesTypeFilter] =
+    useState<NoteTypeFilter>("ALL");
+  const [notesSortOrder, setNotesSortOrder] =
+    useState<NoteSortOrder>("updated-desc");
+  const [notesPageNumber, setNotesPageNumber] = useState(1);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
   const dashboardRequestVersion = useRef(0);
@@ -228,7 +233,18 @@ function Dashboard() {
   const [dashboardState, setDashboardState] = useState<DashboardState>({
     status: "loading",
   });
+  const [selectedWorkspaceNote, setSelectedWorkspaceNote] =
+    useState<DashboardNote | null>(null);
   const previousRoute = useRef(route);
+  const workspaceNoteId =
+    location.noteWorkspace?.mode === "existing"
+      ? location.noteWorkspace.noteId
+      : null;
+  const hasCachedWorkspaceNote =
+    workspaceNoteId !== null &&
+    (selectedWorkspaceNote?.id === workspaceNoteId ||
+      (dashboardState.status === "ready" &&
+        dashboardState.data.notes.some((note) => note.id === workspaceNoteId)));
 
   useEffect(() => {
     const handleRouteChange = () => {
@@ -282,6 +298,14 @@ function Dashboard() {
   }, [route]);
 
   useEffect(() => {
+    const shouldLoadDashboardData =
+      route !== "notes" ||
+      (workspaceNoteId !== null && !hasCachedWorkspaceNote);
+    if (!shouldLoadDashboardData) {
+      dashboardRequestVersion.current += 1;
+      return;
+    }
+
     let active = true;
     const requestVersion = ++dashboardRequestVersion.current;
 
@@ -310,7 +334,7 @@ function Dashboard() {
     return () => {
       active = false;
     };
-  }, [retryCount]);
+  }, [retryCount, route, workspaceNoteId, hasCachedWorkspaceNote]);
 
   useEffect(() => {
     if (!mobileNavigationOpen) return;
@@ -387,16 +411,23 @@ function Dashboard() {
     const workspaceLocation = location.noteWorkspace;
     if (
       workspaceLocation.mode === "existing" &&
-      dashboardState.status === "loading"
+      dashboardState.status === "loading" &&
+      selectedWorkspaceNote?.id !== workspaceLocation.noteId
     ) {
       return <NoteWorkspaceLoading />;
     }
     const workspaceNote =
       workspaceLocation.mode === "existing" &&
-      dashboardState.status === "ready"
-        ? dashboardState.data.notes.find(
-            (note) => note.id === workspaceLocation.noteId,
-          ) ?? null
+      (selectedWorkspaceNote?.id === workspaceLocation.noteId ||
+        dashboardState.status === "ready")
+        ? (selectedWorkspaceNote?.id === workspaceLocation.noteId
+            ? selectedWorkspaceNote
+            : null) ??
+          (dashboardState.status === "ready"
+            ? dashboardState.data.notes.find(
+                (note) => note.id === workspaceLocation.noteId,
+              ) ?? null
+            : null)
         : null;
     if (
       workspaceLocation.mode === "existing" &&
@@ -427,6 +458,9 @@ function Dashboard() {
         onBackToNotes={navigateBackFromNote}
         onDeleted={(noteId) => {
           savedNoteOverridesRef.current.delete(noteId);
+          setSelectedWorkspaceNote((current) =>
+            current?.id === noteId ? null : current,
+          );
           unsavedChangesRef.current = false;
           refreshDashboard();
           navigateBackFromNote();
@@ -436,6 +470,7 @@ function Dashboard() {
         }}
         onSaved={(savedNote) => {
           savedNoteOverridesRef.current.set(savedNote.id, savedNote);
+          setSelectedWorkspaceNote(savedNote);
           setDashboardState((current) =>
             current.status === "ready"
               ? {
@@ -448,6 +483,7 @@ function Dashboard() {
         }}
         onFolderUpdated={(updatedNote) => {
           savedNoteOverridesRef.current.set(updatedNote.id, updatedNote);
+          setSelectedWorkspaceNote(updatedNote);
           setDashboardState((current) =>
             current.status === "ready"
               ? {
@@ -518,18 +554,25 @@ function Dashboard() {
               onNavigateToNotes={() => {
                 window.location.hash = "#/notes";
               }}
+              onOpenNote={(noteId) => {
+                window.location.hash = `#/notes/${noteId}`;
+              }}
             />
           ) : route === "notes" ? (
             <NotesPage
-              dashboardState={dashboardState}
+              refreshKey={retryCount}
               onRetry={refreshDashboard}
-              searchQuery={searchQuery}
-              onSearchQueryChange={setSearchQuery}
-              noteType={noteType}
-              onNoteTypeChange={setNoteType}
-              sortOrder={sortOrder}
-              onSortOrderChange={setSortOrder}
-              onOpenNote={(noteId) => {
+              searchQuery={notesSearchQuery}
+              onSearchQueryChange={setNotesSearchQuery}
+              noteType={notesTypeFilter}
+              onNoteTypeChange={setNotesTypeFilter}
+              sortOrder={notesSortOrder}
+              onSortOrderChange={setNotesSortOrder}
+              page={notesPageNumber}
+              onPageChange={setNotesPageNumber}
+              onOpenNote={(noteId, note) => {
+                savedNoteOverridesRef.current.set(noteId, note);
+                setSelectedWorkspaceNote(note);
                 window.location.hash = `#/notes/${noteId}`;
               }}
             />
@@ -665,12 +708,14 @@ interface DashboardHomeProps {
   dashboardState: DashboardState;
   onRetry: () => void;
   onNavigateToNotes: () => void;
+  onOpenNote: (noteId: number) => void;
 }
 
 function DashboardHome({
   dashboardState,
   onRetry,
   onNavigateToNotes,
+  onOpenNote,
 }: DashboardHomeProps) {
   return (
     <>
@@ -683,6 +728,7 @@ function DashboardHome({
           dashboardState={dashboardState}
           onRetry={onRetry}
           onViewAll={onNavigateToNotes}
+          onOpenNote={onOpenNote}
         />
         <RecentVideos />
       </div>
@@ -854,12 +900,14 @@ interface RecentNotesProps {
   dashboardState: DashboardState;
   onRetry: () => void;
   onViewAll: () => void;
+  onOpenNote: (noteId: number) => void;
 }
 
 function RecentNotes({
   dashboardState,
   onRetry,
   onViewAll,
+  onOpenNote,
 }: RecentNotesProps) {
   return (
     <section className="content-card recent-notes" aria-labelledby="recent-notes-heading">
@@ -886,6 +934,7 @@ function RecentNotes({
         }
         onRetry={onRetry}
         onViewNotes={onViewAll}
+        onSelectNote={onOpenNote}
         compact
       />
     </section>
@@ -971,7 +1020,7 @@ function QuickActions({ onViewNotes }: { onViewNotes: () => void }) {
 }
 
 function NotesPage({
-  dashboardState,
+  refreshKey,
   onRetry,
   searchQuery,
   onSearchQueryChange,
@@ -979,9 +1028,11 @@ function NotesPage({
   onNoteTypeChange,
   sortOrder,
   onSortOrderChange,
+  page,
+  onPageChange,
   onOpenNote,
 }: {
-  dashboardState: DashboardState;
+  refreshKey: number;
   onRetry: () => void;
   searchQuery: string;
   onSearchQueryChange: (value: string) => void;
@@ -989,17 +1040,83 @@ function NotesPage({
   onNoteTypeChange: (value: NoteTypeFilter) => void;
   sortOrder: NoteSortOrder;
   onSortOrderChange: (value: NoteSortOrder) => void;
-  onOpenNote: (noteId: number) => void;
+  page: number;
+  onPageChange: (page: number) => void;
+  onOpenNote: (noteId: number, note: DashboardNote) => void;
 }) {
-  const allNotes =
-    dashboardState.status === "ready" ? dashboardState.data.notes : [];
-  const matchingNotes = allNotes
-    .filter((note) => noteType === "ALL" || note.note_type === noteType)
-    .filter((note) => matchesNoteSearch(note, searchQuery))
-    .sort((left, right) => compareNotes(left, right, sortOrder));
-  const hasNotes =
-    dashboardState.status === "ready" &&
-    dashboardState.data.totalNotes > 0;
+  const [notesPageState, setNotesPageState] = useState<NotesPageState>({
+    queryKey: "",
+    status: "loading",
+  });
+  const queryKey = JSON.stringify([
+    page,
+    searchQuery,
+    noteType,
+    sortOrder,
+    refreshKey,
+  ]);
+
+  useEffect(() => {
+    let active = true;
+    const timeout = window.setTimeout(() => {
+      loadDashboardNotesPage({
+        page,
+        search: searchQuery.trim(),
+        noteType,
+        sortOrder,
+      })
+        .then((data) => {
+          if (active) {
+            setNotesPageState({ queryKey, status: "ready", data });
+          }
+        })
+        .catch((error: unknown) => {
+          if (!active) return;
+          setNotesPageState({
+            queryKey,
+            status: "error",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Could not load saved notes.",
+          });
+        });
+    }, searchQuery.trim() ? 250 : 0);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+    };
+  }, [page, searchQuery, noteType, sortOrder, refreshKey, queryKey]);
+
+  const currentNotesPageState =
+    notesPageState.queryKey === queryKey
+      ? notesPageState
+      : { queryKey, status: "loading" as const };
+  const pageData =
+    currentNotesPageState.status === "ready"
+      ? currentNotesPageState.data
+      : null;
+  const hasFilters = Boolean(searchQuery.trim()) || noteType !== "ALL";
+  const paginationState: DashboardState =
+    currentNotesPageState.status === "loading"
+      ? { status: "loading" }
+      : currentNotesPageState.status === "error"
+        ? { status: "error", message: currentNotesPageState.message }
+        : {
+            status: "ready",
+            data: {
+              notes: pageData?.notes ?? [],
+              totalNotes: pageData?.count ?? 0,
+              recentlyCreatedNotes: 0,
+              videoAssociatedNotes: 0,
+              standaloneNotes: 0,
+              recentNotes: [],
+            },
+          };
+  const pageCount = pageData
+    ? Math.max(1, Math.ceil(pageData.count / pageData.pageSize))
+    : 1;
 
   return (
     <section className="content-card notes-page-card" aria-labelledby="notes-list-heading">
@@ -1011,11 +1128,7 @@ function NotesPage({
             </span>
             <h2 id="notes-list-heading">All notes</h2>
           </div>
-          <p>
-            {hasNotes
-              ? `${dashboardState.data.totalNotes} notes`
-              : "Your saved notes"}
-          </p>
+          <p>{pageData ? `${pageData.count} notes` : "Your saved notes"}</p>
         </div>
         <div className="notes-heading-actions">
           <a className="new-note-button" href="#/notes/new">
@@ -1026,12 +1139,14 @@ function NotesPage({
             className="icon-button"
             type="button"
             aria-label="Refresh notes"
-            disabled={dashboardState.status === "loading"}
+            disabled={currentNotesPageState.status === "loading"}
             onClick={onRetry}
           >
             <RefreshCw
               className={
-                dashboardState.status === "loading" ? "is-spinning" : undefined
+                currentNotesPageState.status === "loading"
+                  ? "is-spinning"
+                  : undefined
               }
               size={16}
               aria-hidden="true"
@@ -1039,83 +1154,118 @@ function NotesPage({
           </button>
         </div>
       </div>
-      {hasNotes ? (
-        <>
-          <div className="notes-toolbar">
-            <label className="notes-search">
-              <span className="visually-hidden">Search notes</span>
-              <Search size={16} aria-hidden="true" />
-              <input
-                type="search"
-                value={searchQuery}
-                onChange={(event) => onSearchQueryChange(event.target.value)}
-                aria-label="Search notes"
-                placeholder="Search titles and note text"
-              />
-            </label>
-            <label className="notes-control">
-              <span>Type</span>
-              <select
-                value={noteType}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  if (isNoteTypeFilter(value)) onNoteTypeChange(value);
-                }}
-              >
-                <option value="ALL">All Notes</option>
-                <option value="VIDEO">Video Notes</option>
-                <option value="STANDALONE">Standalone Notes</option>
-              </select>
-            </label>
-            <label className="notes-control">
-              <span>Sort</span>
-              <select
-                value={sortOrder}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  if (isNoteSortOrder(value)) onSortOrderChange(value);
-                }}
-              >
-                <option value="updated-desc">Recently Updated</option>
-                <option value="created-desc">Recently Created</option>
-                <option value="updated-asc">Oldest Updated</option>
-                <option value="created-asc">Oldest Created</option>
-              </select>
-            </label>
-          </div>
-          <p className="notes-result-count" aria-live="polite">
-            {matchingNotes.length}{" "}
-            {matchingNotes.length === 1 ? "note" : "notes"}
-            {searchQuery.trim() || noteType !== "ALL"
-              ? " match your search and filters"
-              : ""}
-          </p>
-          {matchingNotes.length === 0 ? (
-            <div className="notes-no-matches" role="status">
-              <Search size={19} aria-hidden="true" />
-              <p>No matching notes. Try changing your search or note type.</p>
-            </div>
-          ) : (
-            <NotesListState
-              dashboardState={dashboardState}
-              notes={matchingNotes}
-              onRetry={onRetry}
-              onViewNotes={onRetry}
-              onSelectNote={onOpenNote}
-            />
-          )}
-        </>
+      <div className="notes-toolbar">
+        <label className="notes-search">
+          <span className="visually-hidden">Search notes</span>
+          <Search size={16} aria-hidden="true" />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(event) => {
+              onSearchQueryChange(event.target.value);
+              onPageChange(1);
+            }}
+            aria-label="Search notes"
+            placeholder="Search titles and note text"
+          />
+        </label>
+        <label className="notes-control">
+          <span>Type</span>
+          <select
+            value={noteType}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (isNoteTypeFilter(value)) {
+                onNoteTypeChange(value);
+                onPageChange(1);
+              }
+            }}
+          >
+            <option value="ALL">All Notes</option>
+            <option value="VIDEO">Video Notes</option>
+            <option value="STANDALONE">Standalone Notes</option>
+          </select>
+        </label>
+        <label className="notes-control">
+          <span>Sort</span>
+          <select
+            value={sortOrder}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (isNoteSortOrder(value)) {
+                onSortOrderChange(value);
+                onPageChange(1);
+              }
+            }}
+          >
+            <option value="updated-desc">Recently Updated</option>
+            <option value="created-desc">Recently Created</option>
+            <option value="updated-asc">Oldest Updated</option>
+            <option value="created-asc">Oldest Created</option>
+          </select>
+        </label>
+      </div>
+      <p className="notes-result-count" aria-live="polite">
+        {pageData
+          ? `${pageData.count} ${
+              pageData.count === 1 ? "note" : "notes"
+            }${hasFilters ? " match your search and filters" : ""}`
+          : "Loading notes…"}
+      </p>
+      {pageData?.count === 0 && hasFilters ? (
+        <div className="notes-no-matches" role="status">
+          <Search size={19} aria-hidden="true" />
+          <p>No matching notes. Try changing your search or note type.</p>
+        </div>
       ) : (
         <NotesListState
-          dashboardState={dashboardState}
-          notes={[]}
+          dashboardState={paginationState}
+          notes={pageData?.notes ?? []}
           onRetry={onRetry}
           onViewNotes={onRetry}
+          onSelectNote={(noteId) => {
+            const selectedNote = pageData?.notes.find(
+              (note) => note.id === noteId,
+            );
+            if (selectedNote) onOpenNote(noteId, selectedNote);
+          }}
         />
+      )}
+      {pageData && pageData.count > pageData.pageSize && (
+        <nav className="notes-pagination" aria-label="Notes pages">
+          <button
+            className="workspace-secondary-button"
+            type="button"
+            disabled={pageData.page <= 1}
+            onClick={() => onPageChange(pageData.page - 1)}
+          >
+            Previous
+          </button>
+          <span aria-live="polite">
+            Page {pageData.page} of {pageCount}
+          </span>
+          <button
+            className="workspace-secondary-button"
+            type="button"
+            disabled={pageData.page >= pageCount}
+            onClick={() => onPageChange(pageData.page + 1)}
+          >
+            Next
+          </button>
+        </nav>
       )}
     </section>
   );
 }
+
+type NotesPageState =
+  | { queryKey: string; status: "loading" }
+  | { queryKey: string; status: "error"; message: string }
+  | {
+      queryKey: string;
+      status: "ready";
+      data: Awaited<ReturnType<typeof loadDashboardNotesPage>>;
+    };
 
 type NoteSortOrder =
   | "updated-desc"
@@ -1135,43 +1285,6 @@ function isNoteSortOrder(value: string): value is NoteSortOrder {
 
 function isNoteTypeFilter(value: string): value is NoteTypeFilter {
   return value === "ALL" || value === "VIDEO" || value === "STANDALONE";
-}
-
-function matchesNoteSearch(note: VideoNote, query: string): boolean {
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  if (!normalizedQuery) return true;
-
-  const searchableText = [
-    typeof note.title === "string" ? note.title : "",
-    typeof note.content === "string" ? note.content : "",
-    structuredDocumentText(note),
-  ]
-    .join("\n")
-    .toLocaleLowerCase();
-
-  return searchableText.includes(normalizedQuery);
-}
-
-function compareNotes(
-  left: VideoNote,
-  right: VideoNote,
-  sortOrder: NoteSortOrder,
-): number {
-  const sortByCreated = sortOrder.startsWith("created");
-  const ascending = sortOrder.endsWith("asc");
-  const leftDate = safeDateValue(
-    sortByCreated ? left.created_at : left.updated_at,
-  );
-  const rightDate = safeDateValue(
-    sortByCreated ? right.created_at : right.updated_at,
-  );
-
-  if (leftDate === null && rightDate !== null) return 1;
-  if (leftDate !== null && rightDate === null) return -1;
-  if (leftDate !== null && rightDate !== null && leftDate !== rightDate) {
-    return ascending ? leftDate - rightDate : rightDate - leftDate;
-  }
-  return left.id - right.id;
 }
 
 function safeDateValue(value?: string): number | null {
@@ -1256,6 +1369,9 @@ const dashboardNoteColors: ThemeColors = {
   muted: "#94a3b8",
   accent: "#67e8f9",
   accentSoft: "#12303a",
+  videoActionBackground: "#164e63",
+  videoActionHoverBackground: "#0e7490",
+  videoActionText: "#ecfeff",
   danger: "#f87171",
   shadow: "rgba(0, 0, 0, 0.38)",
 };
@@ -1337,6 +1453,7 @@ function NoteWorkspace({
   const [noteDocument, setNoteDocument] = useState(savedDocument);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [isDeleteConfirmationOpen, setIsDeleteConfirmationOpen] =
     useState(false);
   const [isDeletingNote, setIsDeletingNote] = useState(false);
@@ -1358,6 +1475,8 @@ function NoteWorkspace({
   const [thumbnailUnavailable, setThumbnailUnavailable] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const pageTitleRef = useRef<HTMLHeadingElement>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+  const exportMenuButtonRef = useRef<HTMLButtonElement>(null);
   const deleteButtonRef = useRef<HTMLButtonElement>(null);
   const cancelDeleteButtonRef = useRef<HTMLButtonElement>(null);
   const confirmDeleteButtonRef = useRef<HTMLButtonElement>(null);
@@ -1378,6 +1497,32 @@ function NoteWorkspace({
   useEffect(() => {
     onDirtyChange(isDirty);
   }, [isDirty, onDirtyChange]);
+
+  useEffect(() => {
+    if (!isExportMenuOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !exportMenuRef.current?.contains(event.target)
+      ) {
+        setIsExportMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsExportMenuOpen(false);
+        exportMenuButtonRef.current?.focus();
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isExportMenuOpen]);
 
   useEffect(() => {
     if (mode === "write") {
@@ -1856,6 +2001,12 @@ function NoteWorkspace({
     }
   };
 
+  const selectExport = (exportAction: () => void) => {
+    setIsExportMenuOpen(false);
+    exportMenuButtonRef.current?.focus();
+    exportAction();
+  };
+
   const confirmDeleteNote = async () => {
     if (!note || isNew || deleteRequestInFlight.current) return;
 
@@ -1954,6 +2105,7 @@ function NoteWorkspace({
               className={mode === "write" ? "is-active" : ""}
               onClick={() => {
                 if (mode === "read") {
+                  setIsExportMenuOpen(false);
                   setSaveError(null);
                   setMode("write");
                 }
@@ -1991,44 +2143,63 @@ function NoteWorkspace({
               )}
             </div>
             <div className="workspace-heading-actions">
-              <button
-                className="workspace-secondary-button"
-                type="button"
-                onClick={exportMarkdown}
-              >
-                <Download size={15} aria-hidden="true" />
-                Export Markdown
-              </button>
-              <button
-                className="workspace-secondary-button"
-                type="button"
-                onClick={exportHtml}
-              >
-                <Download size={15} aria-hidden="true" />
-                Export HTML
-              </button>
-              <button
-                className="workspace-secondary-button"
-                type="button"
-                onClick={exportPdf}
-              >
-                <Download size={15} aria-hidden="true" />
-                Export PDF
-              </button>
-              {note && (
-                <button
-                  ref={deleteButtonRef}
-                  className="workspace-delete-button"
-                  type="button"
-                  onClick={() => {
-                    setSaveError(null);
-                    setIsDeleteConfirmationOpen(true);
-                  }}
-                  disabled={isSaving || isDeletingNote}
-                >
-                  <Trash2 size={15} aria-hidden="true" />
-                  Delete
-                </button>
+              {mode === "read" && note && (
+                <>
+                  <div className="workspace-export-menu" ref={exportMenuRef}>
+                    <button
+                      ref={exportMenuButtonRef}
+                      className="workspace-secondary-button workspace-export-trigger"
+                      type="button"
+                      aria-label="Export note"
+                      aria-expanded={isExportMenuOpen}
+                      aria-controls="workspace-export-options"
+                      onClick={() => setIsExportMenuOpen((open) => !open)}
+                    >
+                      <Download size={15} aria-hidden="true" />
+                      Export
+                      <ChevronDown size={14} aria-hidden="true" />
+                    </button>
+                    {isExportMenuOpen && (
+                      <div
+                        className="workspace-export-options"
+                        id="workspace-export-options"
+                        aria-label="Export format"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => selectExport(exportMarkdown)}
+                        >
+                          Export Markdown
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => selectExport(exportHtml)}
+                        >
+                          Export HTML
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => selectExport(exportPdf)}
+                        >
+                          Export PDF
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    ref={deleteButtonRef}
+                    className="workspace-delete-button"
+                    type="button"
+                    onClick={() => {
+                      setSaveError(null);
+                      setIsDeleteConfirmationOpen(true);
+                    }}
+                    disabled={isSaving || isDeletingNote}
+                  >
+                    <Trash2 size={15} aria-hidden="true" />
+                    Delete
+                  </button>
+                </>
               )}
               {mode === "write" && (
                 <button
@@ -2669,9 +2840,13 @@ function DashboardKnowledgeWorkspace({
     number | null
   >(null);
   const [question, setQuestion] = useState("");
+  const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
+  const [failedQuestion, setFailedQuestion] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const conversationRequestVersion = useRef(0);
+  const conversationThreadRef = useRef<HTMLDivElement>(null);
+  const shouldFollowConversationRef = useRef(true);
   const normalizedYoutubeId = (youtubeId ?? videos[0]?.youtubeId ?? "").trim();
   const validVideoContext = YOUTUBE_ID_PATTERN.test(normalizedYoutubeId);
   const currentConversationScope = activeConversation?.scope ?? scope;
@@ -2715,9 +2890,12 @@ function DashboardKnowledgeWorkspace({
 
   function startNewConversation() {
     conversationRequestVersion.current += 1;
+    shouldFollowConversationRef.current = true;
     setActiveConversationId(null);
     setActiveConversation(null);
     setQuestion("");
+    setPendingQuestion(null);
+    setFailedQuestion(null);
     setError(null);
     setScope("PERSONAL_KB");
     setYoutubeId(null);
@@ -2725,9 +2903,12 @@ function DashboardKnowledgeWorkspace({
 
   async function openConversation(conversationId: number) {
     const requestVersion = ++conversationRequestVersion.current;
+    shouldFollowConversationRef.current = true;
     setActiveConversationId(conversationId);
     setActiveConversation(null);
     setQuestion("");
+    setPendingQuestion(null);
+    setFailedQuestion(null);
     setError(null);
     setIsConversationLoading(true);
     try {
@@ -2753,8 +2934,12 @@ function DashboardKnowledgeWorkspace({
 
     const submittedQuestion = question.trim();
     setError(null);
+    setPendingQuestion(submittedQuestion);
+    setFailedQuestion(null);
     setIsAsking(true);
+    shouldFollowConversationRef.current = true;
     let conversationId = activeConversation?.id ?? null;
+    const previousMessageCount = activeConversation?.messages.length ?? 0;
     try {
       if (conversationId === null) {
         const created = await createConversation({
@@ -2783,6 +2968,8 @@ function DashboardKnowledgeWorkspace({
           ],
         };
       });
+      setPendingQuestion(null);
+      setFailedQuestion(null);
       setConversations((current) => [
         turn.conversation,
         ...current.filter((item) => item.id !== turn.conversation.id),
@@ -2791,12 +2978,25 @@ function DashboardKnowledgeWorkspace({
       void refreshConversations();
     } catch (askError) {
       setError(conversationErrorMessage(askError));
+      setPendingQuestion(null);
+      setFailedQuestion(submittedQuestion);
       if (conversationId !== null) {
         void getConversation(conversationId)
           .then((conversation) => {
             setActiveConversation((current) =>
               current?.id === conversation.id ? conversation : current,
             );
+            if (
+              conversation.messages.slice(previousMessageCount).some(
+                (message) =>
+                  message.role === "USER" &&
+                  message.content === submittedQuestion,
+              )
+            ) {
+              setFailedQuestion((current) =>
+                current === submittedQuestion ? null : current,
+              );
+            }
           })
           .catch((refreshError: unknown) => {
             console.error(
@@ -2808,6 +3008,26 @@ function DashboardKnowledgeWorkspace({
     } finally {
       setIsAsking(false);
     }
+  }
+
+  useEffect(() => {
+    const thread = conversationThreadRef.current;
+    if (!thread || !shouldFollowConversationRef.current) return;
+    thread.scrollTop = thread.scrollHeight;
+  }, [
+    activeConversation?.messages.length,
+    activeConversationId,
+    failedQuestion,
+    isAsking,
+    isConversationLoading,
+    pendingQuestion,
+  ]);
+
+  function handleConversationThreadScroll() {
+    const thread = conversationThreadRef.current;
+    if (!thread) return;
+    shouldFollowConversationRef.current =
+      thread.scrollHeight - thread.scrollTop - thread.clientHeight < 96;
   }
 
   async function handleDeleteConversation(conversation: Conversation) {
@@ -3009,7 +3229,11 @@ function DashboardKnowledgeWorkspace({
         </aside>
 
         <div className="knowledge-conversation-main">
-          <div className="content-card knowledge-question-card">
+          <div
+            className={`content-card knowledge-question-card knowledge-chat-panel${
+              activeConversationId !== null ? " is-chat-active" : ""
+            }`}
+          >
             <div className="knowledge-card-heading">
               <span className="knowledge-icon">
                 <Brain size={19} aria-hidden="true" />
@@ -3037,7 +3261,10 @@ function DashboardKnowledgeWorkspace({
               )}
             </div>
 
-            {!activeConversation && !isConversationLoading && (
+            {!activeConversation &&
+              !isConversationLoading &&
+              !pendingQuestion &&
+              !failedQuestion && (
               <div className="knowledge-form knowledge-start-form">
                 <label className="knowledge-field">
                   <span>Knowledge context</span>
@@ -3167,10 +3394,15 @@ function DashboardKnowledgeWorkspace({
                 </div>
               )}
 
-            <div className="knowledge-thread" aria-live="polite">
+            <div
+              className="knowledge-thread"
+              aria-live="polite"
+              ref={conversationThreadRef}
+              onScroll={handleConversationThreadScroll}
+            >
               {activeConversation?.messages.map((message) => (
                 <article
-                  className={`knowledge-message is-${message.role.toLowerCase()}`}
+                  className={`knowledge-message knowledge-chat-message is-${message.role.toLowerCase()}`}
                   key={message.id}
                 >
                   <div className="knowledge-message-heading">
@@ -3267,29 +3499,64 @@ function DashboardKnowledgeWorkspace({
                   )}
                 </article>
               ))}
-              {isAsking && (
-                <div className="knowledge-answer-loading" role="status">
-                  <span />
-                  <span />
-                  <p>Searching sources and preparing an answer...</p>
-                </div>
+              {pendingQuestion && (
+                <>
+                  <article className="knowledge-message knowledge-chat-message is-user is-optimistic">
+                    <div className="knowledge-message-heading">
+                      <strong>You</strong>
+                      <span>Sending</span>
+                    </div>
+                    <p className="knowledge-answer-text">{pendingQuestion}</p>
+                  </article>
+                  <article className="knowledge-message knowledge-chat-message is-assistant is-thinking">
+                    <div className="knowledge-message-heading">
+                      <strong>AI</strong>
+                      <span>Thinking</span>
+                    </div>
+                    <div className="knowledge-thinking-indicator" role="status">
+                      <span />
+                      <span />
+                      <span />
+                      <span className="visually-hidden">
+                        Searching sources and preparing an answer
+                      </span>
+                    </div>
+                  </article>
+                </>
+              )}
+              {failedQuestion && (
+                <article className="knowledge-message knowledge-chat-message is-user is-failed">
+                  <div className="knowledge-message-heading">
+                    <strong>You</strong>
+                    <span>Answer failed</span>
+                  </div>
+                  <p className="knowledge-answer-text">{failedQuestion}</p>
+                  <p className="knowledge-failed-question-status">
+                    Your question is still in the composer so you can retry.
+                  </p>
+                </article>
               )}
               {!activeConversation && !isConversationLoading && (
                 <div className="knowledge-answer-prompt">
                   <span className="knowledge-prompt-icon">
                     <BookOpen size={20} aria-hidden="true" />
                   </span>
+                  <h3>Ask about this knowledge</h3>
                   <p>
-                    Start a conversation by asking a question. No conversation
-                    is saved until you submit.
+                    Ask a question about your notes or the selected video.
+                    Nothing is saved until you send your first question.
                   </p>
                 </div>
               )}
-              {activeConversation?.messages.length === 0 && !isAsking && (
+              {activeConversation?.messages.length === 0 &&
+                !isAsking &&
+                !pendingQuestion &&
+                !failedQuestion && (
                 <div className="knowledge-answer-prompt">
                   <span className="knowledge-prompt-icon">
                     <BookOpen size={20} aria-hidden="true" />
                   </span>
+                  <h3>Ask about this knowledge</h3>
                   <p>Ask a question to begin this conversation.</p>
                 </div>
               )}

@@ -1,0 +1,13 @@
+.editor-special-action {
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.editor-special-action:hover:not(:disabled),
+.editor-special-action:focus-visible {
+  background: var(--editor-special-action-hover) !important;
+}
+
+.editor-special-action:focus-visible {
+  outline: 2px solid var(--editor-special-action-hover);
+  outline-offset: 2px;
+}

@@ -2,8 +2,11 @@
 import logging
 
 from django.db import transaction
+from django.db.models import Q, TextField
+from django.db.models.functions import Cast
 from rest_framework import generics, status
 from rest_framework.exceptions import APIException, NotFound
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -36,6 +39,33 @@ class NoteIndexingUnavailable(APIException):
     default_code = "note_indexing_unavailable"
 
 
+class NoteListPagination(PageNumberPagination):
+    page_size = 10
+
+    def get_page_number(self, request, paginator):
+        requested_page = request.query_params.get(self.page_query_param, "1")
+        if requested_page != self.last_page_strings[0]:
+            try:
+                page_number = int(requested_page)
+            except (TypeError, ValueError):
+                return super().get_page_number(request, paginator)
+            if page_number > paginator.num_pages:
+                return paginator.num_pages
+        return super().get_page_number(request, paginator)
+
+    def get_paginated_response(self, data):
+        return Response(
+            {
+                "count": self.page.paginator.count,
+                "next": self.get_next_link(),
+                "previous": self.get_previous_link(),
+                "page": self.page.number,
+                "page_size": self.page_size,
+                "results": data,
+            }
+        )
+
+
 @transaction.atomic
 def _save_and_index_note(serializer, **save_kwargs):
     note = serializer.save(**save_kwargs)
@@ -48,6 +78,9 @@ def _save_and_index_note(serializer, **save_kwargs):
 
 class NoteListCreateView(generics.ListCreateAPIView):
     serializer_class = NoteSerializer
+    pagination_class = NoteListPagination
+
+    paginated_query_params = {"page", "search", "note_type", "ordering"}
 
     def get_queryset(self):
         return Note.objects.filter(
@@ -56,6 +89,49 @@ class NoteListCreateView(generics.ListCreateAPIView):
             "video",
             "folder",
         )
+
+    def list(self, request, *args, **kwargs):
+        if not self.paginated_query_params.intersection(request.query_params):
+            serializer = self.get_serializer(self.get_queryset(), many=True)
+            return Response(serializer.data)
+
+        queryset = self.get_queryset()
+        search = request.query_params.get("search", "").strip()
+        note_type = request.query_params.get("note_type", "ALL")
+        ordering = request.query_params.get("ordering", "updated-desc")
+        if note_type not in {"ALL", Note.NoteType.VIDEO, Note.NoteType.STANDALONE}:
+            return Response(
+                {"detail": "Unsupported note type filter."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ordering_fields = {
+            "updated-desc": ("-updated_at", "id"),
+            "updated-asc": ("updated_at", "id"),
+            "created-desc": ("-created_at", "id"),
+            "created-asc": ("created_at", "id"),
+        }
+        if ordering not in ordering_fields:
+            return Response(
+                {"detail": "Unsupported note ordering."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if note_type != "ALL":
+            queryset = queryset.filter(note_type=note_type)
+        if search:
+            queryset = queryset.annotate(
+                _document_search=Cast("document", output_field=TextField()),
+            ).filter(
+                Q(title__icontains=search)
+                | Q(content__icontains=search)
+                | Q(_document_search__icontains=search)
+            )
+        queryset = queryset.order_by(*ordering_fields[ordering])
+
+        page = self.paginate_queryset(queryset)
+        serializer = self.get_serializer(page, many=True)
+        return self.get_paginated_response(serializer.data)
 
     def perform_create(self, serializer):
         _save_and_index_note(serializer, user=self.request.user)

@@ -46,6 +46,7 @@ import {
   type RAGAnswer,
   type RAGSource,
 } from "./ragApi";
+import "./sidebar.css";
 import {
   createEmptyDocument,
   documentToPlainText,
@@ -115,11 +116,7 @@ type PrimaryWorkspace = "NOTES" | "ANALYSIS";
 
 type NoteNavigationTab = "READ" | "WRITE" | "AI";
 
-export type TranscriptStatus =
-  | "NOT_STARTED"
-  | "FETCHING"
-  | "READY"
-  | "FAILED";
+export type TranscriptStatus = "NOT_STARTED" | "FETCHING" | "READY" | "FAILED";
 
 interface Position {
   x: number;
@@ -137,6 +134,9 @@ export interface ThemeColors {
   muted: string;
   accent: string;
   accentSoft: string;
+  videoActionBackground: string;
+  videoActionHoverBackground: string;
+  videoActionText: string;
   danger: string;
   shadow: string;
 }
@@ -152,6 +152,9 @@ const DARK_THEME: ThemeColors = {
   muted: "#94a3b8",
   accent: "#67e8f9",
   accentSoft: "#12303a",
+  videoActionBackground: "#164e63",
+  videoActionHoverBackground: "#0e7490",
+  videoActionText: "#ecfeff",
   danger: "#f87171",
   shadow: "rgba(0, 0, 0, 0.38)",
 };
@@ -167,6 +170,9 @@ const LIGHT_THEME: ThemeColors = {
   muted: "#64748b",
   accent: "#0891b2",
   accentSoft: "#ecfeff",
+  videoActionBackground: "#cffafe",
+  videoActionHoverBackground: "#a5f3fc",
+  videoActionText: "#155e75",
   danger: "#dc2626",
   shadow: "rgba(15, 23, 42, 0.18)",
 };
@@ -465,8 +471,7 @@ function isRAGSource(value: unknown): value is RAGSource {
 
   const source = value as Record<string, unknown>;
   const nullableInteger = (field: unknown) =>
-    field === null ||
-    (typeof field === "number" && Number.isInteger(field));
+    field === null || (typeof field === "number" && Number.isInteger(field));
   return (
     typeof source.chunk_id === "number" &&
     Number.isInteger(source.chunk_id) &&
@@ -708,7 +713,13 @@ function AnalysisCard({
   );
 }
 
-function AnalysisTextList({ items, colors }: { items: string[]; colors: ThemeColors }) {
+function AnalysisTextList({
+  items,
+  colors,
+}: {
+  items: string[];
+  colors: ThemeColors;
+}) {
   return (
     <ul style={analysisListStyle}>
       {items.map((item, index) => (
@@ -863,7 +874,11 @@ function getSafeResourceUrl(value: string): string | null {
 
 function getResourceTitle(value: string): string {
   const domain = getResourceDomain(value).toLocaleLowerCase();
-  if (domain === "youtube.com" || domain.endsWith(".youtube.com") || domain === "youtu.be") {
+  if (
+    domain === "youtube.com" ||
+    domain.endsWith(".youtube.com") ||
+    domain === "youtu.be"
+  ) {
     return "YouTube video";
   }
   if (domain === "drive.google.com" || domain.endsWith(".drive.google.com")) {
@@ -971,7 +986,10 @@ export function BlockEditor({
   async function captureScreenshot(afterId?: string) {
     if (!onCaptureScreenshot || isCapturingScreenshot) return;
     setIsCapturingScreenshot(true);
-    setScreenshotCaptureMessage({ text: "Capturing screenshot...", isError: false });
+    setScreenshotCaptureMessage({
+      text: "Capturing screenshot...",
+      isError: false,
+    });
     try {
       const block = await onCaptureScreenshot();
       if (
@@ -1647,7 +1665,8 @@ export function BlockEditor({
                   rows={8}
                   style={{
                     ...editorTextareaStyle,
-                    fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+                    fontFamily:
+                      '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
                     fontSize: 12,
                     color: colors.primaryText,
                     background: colors.input,
@@ -1656,7 +1675,11 @@ export function BlockEditor({
                   }}
                 />
                 <input
-                  value={block.metadata?.[block.type === "code" ? "language" : "shell"] || ""}
+                  value={
+                    block.metadata?.[
+                      block.type === "code" ? "language" : "shell"
+                    ] || ""
+                  }
                   aria-label={`${block.type === "code" ? "Language" : "Shell"} for block ${index + 1}`}
                   onChange={(event) =>
                     updateBlock(block.id, {
@@ -1669,7 +1692,9 @@ export function BlockEditor({
                     })
                   }
                   placeholder={
-                    block.type === "code" ? "Language (for example, python)" : "Shell (for example, bash)"
+                    block.type === "code"
+                      ? "Language (for example, python)"
+                      : "Shell (for example, bash)"
                   }
                   style={{
                     ...editorInputStyle,
@@ -1680,7 +1705,8 @@ export function BlockEditor({
                   }}
                 />
               </div>
-            ) : block.type === "bullet_list" || block.type === "numbered_list" ? (
+            ) : block.type === "bullet_list" ||
+              block.type === "numbered_list" ? (
               <textarea
                 value={normalizeListContent(block.content)}
                 aria-label={`${block.type === "bullet_list" ? "Bulleted" : "Numbered"} list for block ${index + 1}`}
@@ -1842,10 +1868,9 @@ export function BlockEditor({
                   addBlock("timestamp", block.id, timestampContent())
                 }
                 style={{
-                  ...smallToolButton,
-                  color: colors.accent,
-                  borderColor: colors.border,
+                  ...editorSpecialActionStyle(colors),
                 }}
+                className="editor-special-action"
               >
                 + Timestamp
               </button>
@@ -1882,11 +1907,10 @@ export function BlockEditor({
                   disabled={isCapturingScreenshot}
                   onClick={() => void captureScreenshot(block.id)}
                   style={{
-                    ...smallToolButton,
-                    color: colors.accent,
-                    borderColor: colors.border,
+                    ...editorSpecialActionStyle(colors),
                     opacity: isCapturingScreenshot ? 0.6 : 1,
                   }}
+                  className="editor-special-action"
                 >
                   <Camera size={12} aria-hidden="true" />
                   {isCapturingScreenshot
@@ -2196,11 +2220,17 @@ export function NoteReader({
           }
 
           if (block.type === "url") {
-            const resourceUrl = (block.content || block.metadata?.url || "").trim();
+            const resourceUrl = (
+              block.content ||
+              block.metadata?.url ||
+              ""
+            ).trim();
             const safeResourceUrl = getSafeResourceUrl(resourceUrl);
-            const title = block.metadata?.title || getResourceTitle(resourceUrl);
+            const title =
+              block.metadata?.title || getResourceTitle(resourceUrl);
             const description = block.metadata?.description || "";
-            const domain = block.metadata?.domain || getResourceDomain(resourceUrl) || "";
+            const domain =
+              block.metadata?.domain || getResourceDomain(resourceUrl) || "";
 
             return (
               <a
@@ -2218,7 +2248,9 @@ export function NoteReader({
                   color: colors.text,
                 }}
               >
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                <div
+                  style={{ display: "flex", alignItems: "flex-start", gap: 10 }}
+                >
                   <div
                     style={{
                       width: 28,
@@ -2235,16 +2267,45 @@ export function NoteReader({
                     🔗
                   </div>
                   <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontWeight: 700, color: colors.primaryText, marginBottom: 2 }}>
+                    <div
+                      style={{
+                        fontWeight: 700,
+                        color: colors.primaryText,
+                        marginBottom: 2,
+                      }}
+                    >
                       {title || "Resource"}
                     </div>
                     {domain ? (
-                      <div style={{ fontSize: 11, color: colors.muted, marginBottom: 4 }}>{domain}</div>
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: colors.muted,
+                          marginBottom: 4,
+                        }}
+                      >
+                        {domain}
+                      </div>
                     ) : null}
                     {description ? (
-                      <div style={{ fontSize: 12, color: colors.text, lineHeight: 1.5 }}>{description}</div>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: colors.text,
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        {description}
+                      </div>
                     ) : null}
-                    <div style={{ marginTop: 6, fontSize: 11, color: colors.accent, wordBreak: "break-word" }}>
+                    <div
+                      style={{
+                        marginTop: 6,
+                        fontSize: 11,
+                        color: colors.accent,
+                        wordBreak: "break-word",
+                      }}
+                    >
                       {resourceUrl || "No URL"}
                     </div>
                   </div>
@@ -2281,7 +2342,14 @@ export function NoteReader({
                     gap: 8,
                   }}
                 >
-                  <span style={{ fontSize: 11, color: colors.muted, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: colors.muted,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.4,
+                    }}
+                  >
                     {block.type === "code" ? "Code" : "Command"}
                     {languageLabel ? ` · ${languageLabel}` : ""}
                   </span>
@@ -2294,7 +2362,8 @@ export function NoteReader({
                     borderRadius: 8,
                     background: colors.input,
                     color: colors.text,
-                    fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+                    fontFamily:
+                      '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
                     fontSize: 12,
                     lineHeight: 1.55,
                     overflowX: "auto",
@@ -2348,7 +2417,6 @@ export function NoteReader({
           );
         })}
       </div>
-
     </div>
   );
 }
@@ -2400,12 +2468,7 @@ interface NoteWriterProps {
   onSaved: (note: VideoNote) => void;
 }
 
-function NoteWriter({
-  note,
-  videoId,
-  colors,
-  onSaved,
-}: NoteWriterProps) {
+function NoteWriter({ note, videoId, colors, onSaved }: NoteWriterProps) {
   const [title, setTitle] = useState(note?.title ?? "");
 
   const [noteDocument, setNoteDocument] = useState<NoteDocument>(() =>
@@ -2426,8 +2489,7 @@ function NoteWriter({
     [screenshotCaptureEligible],
   );
   const getScreenshotAvailability = useCallback(
-    () =>
-      screenshotCaptureEligible && isCurrentVideoPlayerAvailable(videoId),
+    () => screenshotCaptureEligible && isCurrentVideoPlayerAvailable(videoId),
     [screenshotCaptureEligible, videoId],
   );
   const canCaptureScreenshot = useSyncExternalStore(
@@ -2473,14 +2535,13 @@ function NoteWriter({
       blocks: noteDocument.blocks.map((block) => ({
         ...block,
         content:
-          block.type === "bullet_list" ||
-          block.type === "numbered_list"
+          block.type === "bullet_list" || block.type === "numbered_list"
             ? normalizeListContent(block.content)
             : block.type === "image" ||
-          block.type === "code" ||
-          block.type === "command"
-            ? block.content
-            : block.content.trim(),
+                block.type === "code" ||
+                block.type === "command"
+              ? block.content
+              : block.content.trim(),
       })),
     };
 
@@ -2571,7 +2632,13 @@ function NoteWriter({
             cursor: isSaving ? "default" : "pointer",
           }}
         >
-          {isSaving ? "Saving…" : <><Save size={14} aria-hidden="true" /> Save</>}
+          {isSaving ? (
+            "Saving…"
+          ) : (
+            <>
+              <Save size={14} aria-hidden="true" /> Save
+            </>
+          )}
         </button>
       </div>
 
@@ -2598,7 +2665,9 @@ function NoteWriter({
         noteDocument={noteDocument}
         colors={colors}
         onChange={setNoteDocument}
-        onCaptureScreenshot={canCaptureScreenshot ? captureScreenshotBlock : undefined}
+        onCaptureScreenshot={
+          canCaptureScreenshot ? captureScreenshotBlock : undefined
+        }
       />
 
       <div
@@ -3419,9 +3488,9 @@ export default function Sidebar({
 
   const [selectedNote, setSelectedNote] = useState<VideoNote | null>(null);
 
-  const [expandedConcepts, setExpandedConcepts] = useState<Record<string, boolean>>(
-    {},
-  );
+  const [expandedConcepts, setExpandedConcepts] = useState<
+    Record<string, boolean>
+  >({});
 
   const [editingNote, setEditingNote] = useState<VideoNote | null>(null);
 
@@ -3471,7 +3540,10 @@ export default function Sidebar({
     setPreviousContextState({ videoId, status: "loading" });
 
     try {
-      const response = await sendPreviousContext(videoId, abortController.signal);
+      const response = await sendPreviousContext(
+        videoId,
+        abortController.signal,
+      );
       if (
         requestVersion !== previousContextRequestVersion.current ||
         currentVideoIdRef.current !== videoId ||
@@ -3575,10 +3647,7 @@ export default function Sidebar({
       return;
     }
 
-    if (
-      persistedAnalysis !== null &&
-      isVideoAnalysis(persistedAnalysis)
-    ) {
+    if (persistedAnalysis !== null && isVideoAnalysis(persistedAnalysis)) {
       setVideoAnalysis({ videoId, analysis: persistedAnalysis });
     } else {
       setVideoAnalysis(null);
@@ -3586,10 +3655,7 @@ export default function Sidebar({
   }, [contextStatus, persistedAnalysis, videoId]);
 
   useEffect(() => {
-    if (
-      contextStatus === "loaded" &&
-      transcriptStatus !== null
-    ) {
+    if (contextStatus === "loaded" && transcriptStatus !== null) {
       setTranscriptState({ videoId, status: transcriptStatus });
       setTranscriptError(null);
     }
@@ -3955,15 +4021,11 @@ export default function Sidebar({
         current.filter((currentNote) => currentNote.id !== note.id),
       );
 
-      if (
-        selectedNote?.id === note.id ||
-        editingNote?.id === note.id
-      ) {
+      if (selectedNote?.id === note.id || editingNote?.id === note.id) {
         setSelectedNote(null);
         setEditingNote(null);
         setViewMode("LIST");
       }
-
     } catch (deleteFailure) {
       setDeleteError(
         deleteFailure instanceof Error
@@ -4551,7 +4613,8 @@ export default function Sidebar({
                     </div>
                   ) : null}
 
-                  {(prerequisiteConcepts.length > 0 || upcomingConcepts.length > 0) && (
+                  {(prerequisiteConcepts.length > 0 ||
+                    upcomingConcepts.length > 0) && (
                     <div style={{ marginBottom: 12 }}>
                       <h3
                         style={{
@@ -4581,17 +4644,24 @@ export default function Sidebar({
                           <div style={{ display: "grid", gap: 6 }}>
                             {prerequisiteConcepts.map((concept) => {
                               const conceptKey = `${concept.type}-${concept.name}`;
-                              const isExpanded = Boolean(expandedConcepts[conceptKey]);
+                              const isExpanded = Boolean(
+                                expandedConcepts[conceptKey],
+                              );
                               const hasReason =
                                 typeof concept.reason === "string" &&
                                 concept.reason.trim().length > 0;
                               const hasEvidence =
                                 typeof concept.evidence === "string" &&
                                 concept.evidence.trim().length > 0;
-                              const hasTimestamps = concept.timestamps.length > 0;
-                              const hasPersonalNotes = concept.personal_notes.length > 0;
+                              const hasTimestamps =
+                                concept.timestamps.length > 0;
+                              const hasPersonalNotes =
+                                concept.personal_notes.length > 0;
                               const showDetails =
-                                hasReason || hasEvidence || hasTimestamps || hasPersonalNotes;
+                                hasReason ||
+                                hasEvidence ||
+                                hasTimestamps ||
+                                hasPersonalNotes;
 
                               return (
                                 <div
@@ -4663,18 +4733,25 @@ export default function Sidebar({
                                         {concept.related_count > 0 && (
                                           <span>
                                             {concept.related_count} related note
-                                            {concept.related_count === 1 ? "" : "s"}
+                                            {concept.related_count === 1
+                                              ? ""
+                                              : "s"}
                                           </span>
                                         )}
                                       </div>
                                     </div>
-                                    {showDetails && (
-                                      isExpanded ? (
-                                        <ChevronDown size={13} aria-hidden="true" />
+                                    {showDetails &&
+                                      (isExpanded ? (
+                                        <ChevronDown
+                                          size={13}
+                                          aria-hidden="true"
+                                        />
                                       ) : (
-                                        <ChevronRight size={13} aria-hidden="true" />
-                                      )
-                                    )}
+                                        <ChevronRight
+                                          size={13}
+                                          aria-hidden="true"
+                                        />
+                                      ))}
                                   </button>
 
                                   {isExpanded && showDetails && (
@@ -4754,31 +4831,44 @@ export default function Sidebar({
                                           >
                                             Timestamps
                                           </div>
-                                          <div style={{ display: "grid", gap: 4 }}>
-                                            {concept.timestamps.map((timestamp, index) => (
-                                              <button
-                                                key={`${concept.name}-${timestamp.seconds}-${index}`}
-                                                type="button"
-                                                onClick={() => jumpToTimestamp(timestamp.seconds)}
-                                                style={{
-                                                  display: "inline-flex",
-                                                  alignItems: "center",
-                                                  gap: 5,
-                                                  width: "fit-content",
-                                                  padding: "3px 6px",
-                                                  borderRadius: 6,
-                                                  border: `1px solid ${colors.border}`,
-                                                  background: colors.surface,
-                                                  color: colors.accent,
-                                                  fontSize: 10,
-                                                  fontWeight: 700,
-                                                  cursor: "pointer",
-                                                }}
-                                              >
-                                                <Play size={10} aria-hidden="true" />
-                                                {formatTimestamp(timestamp.seconds)}
-                                              </button>
-                                            ))}
+                                          <div
+                                            style={{ display: "grid", gap: 4 }}
+                                          >
+                                            {concept.timestamps.map(
+                                              (timestamp, index) => (
+                                                <button
+                                                  key={`${concept.name}-${timestamp.seconds}-${index}`}
+                                                  type="button"
+                                                  onClick={() =>
+                                                    jumpToTimestamp(
+                                                      timestamp.seconds,
+                                                    )
+                                                  }
+                                                  style={{
+                                                    display: "inline-flex",
+                                                    alignItems: "center",
+                                                    gap: 5,
+                                                    width: "fit-content",
+                                                    padding: "3px 6px",
+                                                    borderRadius: 6,
+                                                    border: `1px solid ${colors.border}`,
+                                                    background: colors.surface,
+                                                    color: colors.accent,
+                                                    fontSize: 10,
+                                                    fontWeight: 700,
+                                                    cursor: "pointer",
+                                                  }}
+                                                >
+                                                  <Play
+                                                    size={10}
+                                                    aria-hidden="true"
+                                                  />
+                                                  {formatTimestamp(
+                                                    timestamp.seconds,
+                                                  )}
+                                                </button>
+                                              ),
+                                            )}
                                           </div>
                                         </div>
                                       )}
@@ -4797,100 +4887,117 @@ export default function Sidebar({
                                           >
                                             Personal Notes
                                           </div>
-                                          <div style={{ display: "grid", gap: 5 }}>
-                                            {concept.personal_notes.map((item) => {
-                                              const note = currentNotes.find(
-                                                (currentNote) => currentNote.id === item.note_id,
-                                              );
-                                              const preview = item.content
-                                                .replace(/\s+/g, " ")
-                                                .trim();
-                                              const contentPreview =
-                                                preview.length > 120
-                                                  ? `${preview.slice(0, 117)}...`
-                                                  : preview;
-                                              const content = (
-                                                <>
-                                                  <span
-                                                    style={{
-                                                      display: "flex",
-                                                      alignItems: "center",
-                                                      gap: 6,
-                                                      fontWeight: 700,
-                                                    }}
-                                                  >
-                                                    <FileText
-                                                      size={11}
-                                                      aria-hidden="true"
-                                                      style={{ color: colors.muted }}
-                                                    />
-                                                    {item.title || "Related note"}
-                                                  </span>
-                                                  {contentPreview && (
+                                          <div
+                                            style={{ display: "grid", gap: 5 }}
+                                          >
+                                            {concept.personal_notes.map(
+                                              (item) => {
+                                                const note = currentNotes.find(
+                                                  (currentNote) =>
+                                                    currentNote.id ===
+                                                    item.note_id,
+                                                );
+                                                const preview = item.content
+                                                  .replace(/\s+/g, " ")
+                                                  .trim();
+                                                const contentPreview =
+                                                  preview.length > 120
+                                                    ? `${preview.slice(0, 117)}...`
+                                                    : preview;
+                                                const content = (
+                                                  <>
                                                     <span
                                                       style={{
-                                                        display: "-webkit-box",
-                                                        overflow: "hidden",
-                                                        color: colors.muted,
-                                                        fontSize: 10,
-                                                        WebkitBoxOrient: "vertical",
-                                                        WebkitLineClamp: 2,
+                                                        display: "flex",
+                                                        alignItems: "center",
+                                                        gap: 6,
+                                                        fontWeight: 700,
                                                       }}
                                                     >
-                                                      {contentPreview}
+                                                      <FileText
+                                                        size={11}
+                                                        aria-hidden="true"
+                                                        style={{
+                                                          color: colors.muted,
+                                                        }}
+                                                      />
+                                                      {item.title ||
+                                                        "Related note"}
                                                     </span>
-                                                  )}
-                                                </>
-                                              );
+                                                    {contentPreview && (
+                                                      <span
+                                                        style={{
+                                                          display:
+                                                            "-webkit-box",
+                                                          overflow: "hidden",
+                                                          color: colors.muted,
+                                                          fontSize: 10,
+                                                          WebkitBoxOrient:
+                                                            "vertical",
+                                                          WebkitLineClamp: 2,
+                                                        }}
+                                                      >
+                                                        {contentPreview}
+                                                      </span>
+                                                    )}
+                                                  </>
+                                                );
 
-                                              return note ? (
-                                                <button
-                                                  key={`${item.note_id}-${item.chunk_id}`}
-                                                  type="button"
-                                                  onClick={() => openReader(note)}
-                                                  title={item.title || "Related note"}
-                                                  style={{
-                                                    display: "flex",
-                                                    flexDirection: "column",
-                                                    alignItems: "flex-start",
-                                                    gap: 3,
-                                                    width: "100%",
-                                                    minWidth: 0,
-                                                    padding: "5px 6px",
-                                                    border: "none",
-                                                    borderRadius: 6,
-                                                    background: "transparent",
-                                                    color: colors.text,
-                                                    textAlign: "left",
-                                                    cursor: "pointer",
-                                                    fontSize: 10,
-                                                    lineHeight: 1.4,
-                                                  }}
-                                                >
-                                                  {content}
-                                                </button>
-                                              ) : (
-                                                <div
-                                                  key={`${item.note_id}-${item.chunk_id}`}
-                                                  style={{
-                                                    display: "flex",
-                                                    flexDirection: "column",
-                                                    alignItems: "flex-start",
-                                                    gap: 3,
-                                                    width: "100%",
-                                                    minWidth: 0,
-                                                    padding: "5px 6px",
-                                                    borderRadius: 6,
-                                                    background: colors.surface,
-                                                    color: colors.text,
-                                                    fontSize: 10,
-                                                    lineHeight: 1.4,
-                                                  }}
-                                                >
-                                                  {content}
-                                                </div>
-                                              );
-                                            })}
+                                                return note ? (
+                                                  <button
+                                                    key={`${item.note_id}-${item.chunk_id}`}
+                                                    type="button"
+                                                    onClick={() =>
+                                                      openReader(note)
+                                                    }
+                                                    title={
+                                                      item.title ||
+                                                      "Related note"
+                                                    }
+                                                    style={{
+                                                      display: "flex",
+                                                      flexDirection: "column",
+                                                      alignItems: "flex-start",
+                                                      gap: 3,
+                                                      width: "100%",
+                                                      minWidth: 0,
+                                                      padding: "5px 6px",
+                                                      border: "none",
+                                                      borderRadius: 6,
+                                                      background: "transparent",
+                                                      color: colors.text,
+                                                      textAlign: "left",
+                                                      cursor: "pointer",
+                                                      fontSize: 10,
+                                                      lineHeight: 1.4,
+                                                    }}
+                                                  >
+                                                    {content}
+                                                  </button>
+                                                ) : (
+                                                  <div
+                                                    key={`${item.note_id}-${item.chunk_id}`}
+                                                    style={{
+                                                      display: "flex",
+                                                      flexDirection: "column",
+                                                      alignItems: "flex-start",
+                                                      gap: 3,
+                                                      width: "100%",
+                                                      minWidth: 0,
+                                                      padding: "5px 6px",
+                                                      borderRadius: 6,
+                                                      background:
+                                                        colors.surface,
+                                                      color: colors.text,
+                                                      fontSize: 10,
+                                                      lineHeight: 1.4,
+                                                    }}
+                                                  >
+                                                    {content}
+                                                  </div>
+                                                );
+                                              },
+                                            )}
                                           </div>
                                         </div>
                                       )}
@@ -4920,17 +5027,24 @@ export default function Sidebar({
                           <div style={{ display: "grid", gap: 6 }}>
                             {upcomingConcepts.map((concept) => {
                               const conceptKey = `${concept.type}-${concept.name}`;
-                              const isExpanded = Boolean(expandedConcepts[conceptKey]);
+                              const isExpanded = Boolean(
+                                expandedConcepts[conceptKey],
+                              );
                               const hasReason =
                                 typeof concept.reason === "string" &&
                                 concept.reason.trim().length > 0;
                               const hasEvidence =
                                 typeof concept.evidence === "string" &&
                                 concept.evidence.trim().length > 0;
-                              const hasTimestamps = concept.timestamps.length > 0;
-                              const hasPersonalNotes = concept.personal_notes.length > 0;
+                              const hasTimestamps =
+                                concept.timestamps.length > 0;
+                              const hasPersonalNotes =
+                                concept.personal_notes.length > 0;
                               const showDetails =
-                                hasReason || hasEvidence || hasTimestamps || hasPersonalNotes;
+                                hasReason ||
+                                hasEvidence ||
+                                hasTimestamps ||
+                                hasPersonalNotes;
 
                               return (
                                 <div
@@ -5002,18 +5116,25 @@ export default function Sidebar({
                                         {concept.related_count > 0 && (
                                           <span>
                                             {concept.related_count} related note
-                                            {concept.related_count === 1 ? "" : "s"}
+                                            {concept.related_count === 1
+                                              ? ""
+                                              : "s"}
                                           </span>
                                         )}
                                       </div>
                                     </div>
-                                    {showDetails && (
-                                      isExpanded ? (
-                                        <ChevronDown size={13} aria-hidden="true" />
+                                    {showDetails &&
+                                      (isExpanded ? (
+                                        <ChevronDown
+                                          size={13}
+                                          aria-hidden="true"
+                                        />
                                       ) : (
-                                        <ChevronRight size={13} aria-hidden="true" />
-                                      )
-                                    )}
+                                        <ChevronRight
+                                          size={13}
+                                          aria-hidden="true"
+                                        />
+                                      ))}
                                   </button>
 
                                   {isExpanded && showDetails && (
@@ -5093,31 +5214,44 @@ export default function Sidebar({
                                           >
                                             Timestamps
                                           </div>
-                                          <div style={{ display: "grid", gap: 4 }}>
-                                            {concept.timestamps.map((timestamp, index) => (
-                                              <button
-                                                key={`${concept.name}-${timestamp.seconds}-${index}`}
-                                                type="button"
-                                                onClick={() => jumpToTimestamp(timestamp.seconds)}
-                                                style={{
-                                                  display: "inline-flex",
-                                                  alignItems: "center",
-                                                  gap: 5,
-                                                  width: "fit-content",
-                                                  padding: "3px 6px",
-                                                  borderRadius: 6,
-                                                  border: `1px solid ${colors.border}`,
-                                                  background: colors.surface,
-                                                  color: colors.accent,
-                                                  fontSize: 10,
-                                                  fontWeight: 700,
-                                                  cursor: "pointer",
-                                                }}
-                                              >
-                                                <Play size={10} aria-hidden="true" />
-                                                {formatTimestamp(timestamp.seconds)}
-                                              </button>
-                                            ))}
+                                          <div
+                                            style={{ display: "grid", gap: 4 }}
+                                          >
+                                            {concept.timestamps.map(
+                                              (timestamp, index) => (
+                                                <button
+                                                  key={`${concept.name}-${timestamp.seconds}-${index}`}
+                                                  type="button"
+                                                  onClick={() =>
+                                                    jumpToTimestamp(
+                                                      timestamp.seconds,
+                                                    )
+                                                  }
+                                                  style={{
+                                                    display: "inline-flex",
+                                                    alignItems: "center",
+                                                    gap: 5,
+                                                    width: "fit-content",
+                                                    padding: "3px 6px",
+                                                    borderRadius: 6,
+                                                    border: `1px solid ${colors.border}`,
+                                                    background: colors.surface,
+                                                    color: colors.accent,
+                                                    fontSize: 10,
+                                                    fontWeight: 700,
+                                                    cursor: "pointer",
+                                                  }}
+                                                >
+                                                  <Play
+                                                    size={10}
+                                                    aria-hidden="true"
+                                                  />
+                                                  {formatTimestamp(
+                                                    timestamp.seconds,
+                                                  )}
+                                                </button>
+                                              ),
+                                            )}
                                           </div>
                                         </div>
                                       )}
@@ -5136,100 +5270,117 @@ export default function Sidebar({
                                           >
                                             Personal Notes
                                           </div>
-                                          <div style={{ display: "grid", gap: 5 }}>
-                                            {concept.personal_notes.map((item) => {
-                                              const note = currentNotes.find(
-                                                (currentNote) => currentNote.id === item.note_id,
-                                              );
-                                              const preview = item.content
-                                                .replace(/\s+/g, " ")
-                                                .trim();
-                                              const contentPreview =
-                                                preview.length > 120
-                                                  ? `${preview.slice(0, 117)}...`
-                                                  : preview;
-                                              const content = (
-                                                <>
-                                                  <span
-                                                    style={{
-                                                      display: "flex",
-                                                      alignItems: "center",
-                                                      gap: 6,
-                                                      fontWeight: 700,
-                                                    }}
-                                                  >
-                                                    <FileText
-                                                      size={11}
-                                                      aria-hidden="true"
-                                                      style={{ color: colors.muted }}
-                                                    />
-                                                    {item.title || "Related note"}
-                                                  </span>
-                                                  {contentPreview && (
+                                          <div
+                                            style={{ display: "grid", gap: 5 }}
+                                          >
+                                            {concept.personal_notes.map(
+                                              (item) => {
+                                                const note = currentNotes.find(
+                                                  (currentNote) =>
+                                                    currentNote.id ===
+                                                    item.note_id,
+                                                );
+                                                const preview = item.content
+                                                  .replace(/\s+/g, " ")
+                                                  .trim();
+                                                const contentPreview =
+                                                  preview.length > 120
+                                                    ? `${preview.slice(0, 117)}...`
+                                                    : preview;
+                                                const content = (
+                                                  <>
                                                     <span
                                                       style={{
-                                                        display: "-webkit-box",
-                                                        overflow: "hidden",
-                                                        color: colors.muted,
-                                                        fontSize: 10,
-                                                        WebkitBoxOrient: "vertical",
-                                                        WebkitLineClamp: 2,
+                                                        display: "flex",
+                                                        alignItems: "center",
+                                                        gap: 6,
+                                                        fontWeight: 700,
                                                       }}
                                                     >
-                                                      {contentPreview}
+                                                      <FileText
+                                                        size={11}
+                                                        aria-hidden="true"
+                                                        style={{
+                                                          color: colors.muted,
+                                                        }}
+                                                      />
+                                                      {item.title ||
+                                                        "Related note"}
                                                     </span>
-                                                  )}
-                                                </>
-                                              );
+                                                    {contentPreview && (
+                                                      <span
+                                                        style={{
+                                                          display:
+                                                            "-webkit-box",
+                                                          overflow: "hidden",
+                                                          color: colors.muted,
+                                                          fontSize: 10,
+                                                          WebkitBoxOrient:
+                                                            "vertical",
+                                                          WebkitLineClamp: 2,
+                                                        }}
+                                                      >
+                                                        {contentPreview}
+                                                      </span>
+                                                    )}
+                                                  </>
+                                                );
 
-                                              return note ? (
-                                                <button
-                                                  key={`${item.note_id}-${item.chunk_id}`}
-                                                  type="button"
-                                                  onClick={() => openReader(note)}
-                                                  title={item.title || "Related note"}
-                                                  style={{
-                                                    display: "flex",
-                                                    flexDirection: "column",
-                                                    alignItems: "flex-start",
-                                                    gap: 3,
-                                                    width: "100%",
-                                                    minWidth: 0,
-                                                    padding: "5px 6px",
-                                                    border: "none",
-                                                    borderRadius: 6,
-                                                    background: "transparent",
-                                                    color: colors.text,
-                                                    textAlign: "left",
-                                                    cursor: "pointer",
-                                                    fontSize: 10,
-                                                    lineHeight: 1.4,
-                                                  }}
-                                                >
-                                                  {content}
-                                                </button>
-                                              ) : (
-                                                <div
-                                                  key={`${item.note_id}-${item.chunk_id}`}
-                                                  style={{
-                                                    display: "flex",
-                                                    flexDirection: "column",
-                                                    alignItems: "flex-start",
-                                                    gap: 3,
-                                                    width: "100%",
-                                                    minWidth: 0,
-                                                    padding: "5px 6px",
-                                                    borderRadius: 6,
-                                                    background: colors.surface,
-                                                    color: colors.text,
-                                                    fontSize: 10,
-                                                    lineHeight: 1.4,
-                                                  }}
-                                                >
-                                                  {content}
-                                                </div>
-                                              );
-                                            })}
+                                                return note ? (
+                                                  <button
+                                                    key={`${item.note_id}-${item.chunk_id}`}
+                                                    type="button"
+                                                    onClick={() =>
+                                                      openReader(note)
+                                                    }
+                                                    title={
+                                                      item.title ||
+                                                      "Related note"
+                                                    }
+                                                    style={{
+                                                      display: "flex",
+                                                      flexDirection: "column",
+                                                      alignItems: "flex-start",
+                                                      gap: 3,
+                                                      width: "100%",
+                                                      minWidth: 0,
+                                                      padding: "5px 6px",
+                                                      border: "none",
+                                                      borderRadius: 6,
+                                                      background: "transparent",
+                                                      color: colors.text,
+                                                      textAlign: "left",
+                                                      cursor: "pointer",
+                                                      fontSize: 10,
+                                                      lineHeight: 1.4,
+                                                    }}
+                                                  >
+                                                    {content}
+                                                  </button>
+                                                ) : (
+                                                  <div
+                                                    key={`${item.note_id}-${item.chunk_id}`}
+                                                    style={{
+                                                      display: "flex",
+                                                      flexDirection: "column",
+                                                      alignItems: "flex-start",
+                                                      gap: 3,
+                                                      width: "100%",
+                                                      minWidth: 0,
+                                                      padding: "5px 6px",
+                                                      borderRadius: 6,
+                                                      background:
+                                                        colors.surface,
+                                                      color: colors.text,
+                                                      fontSize: 10,
+                                                      lineHeight: 1.4,
+                                                    }}
+                                                  >
+                                                    {content}
+                                                  </div>
+                                                );
+                                              },
+                                            )}
                                           </div>
                                         </div>
                                       )}
@@ -5339,55 +5490,55 @@ export default function Sidebar({
                   border: `1px solid ${colors.border}`,
                 }}
               >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8,
-                  marginBottom: 10,
-                }}
-              >
-                <h2
-                  style={{
-                    margin: 0,
-                    fontSize: 14,
-                    fontWeight: 800,
-                    color: colors.primaryText,
-                  }}
-                >
-                  Transcript
-                </h2>
-                <span
-                  style={{
-                    color: colors.muted,
-                    fontSize: 11,
-                    fontWeight: 700,
-                  }}
-                >
-                  {currentTranscriptStatus === "FETCHING"
-                    ? "Fetching..."
-                    : currentTranscriptStatus === "FAILED"
-                      ? "Failed"
-                      : "Not available"}
-                </span>
-              </div>
-
-              {currentTranscriptError && (
                 <div
-                  role="alert"
                   style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
                     marginBottom: 10,
-                    color: colors.danger,
-                    fontSize: 11,
-                    lineHeight: 1.5,
                   }}
                 >
-                  {currentTranscriptError}
+                  <h2
+                    style={{
+                      margin: 0,
+                      fontSize: 14,
+                      fontWeight: 800,
+                      color: colors.primaryText,
+                    }}
+                  >
+                    Transcript
+                  </h2>
+                  <span
+                    style={{
+                      color: colors.muted,
+                      fontSize: 11,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {currentTranscriptStatus === "FETCHING"
+                      ? "Fetching..."
+                      : currentTranscriptStatus === "FAILED"
+                        ? "Failed"
+                        : "Not available"}
+                  </span>
                 </div>
-              )}
 
-              {contextStatus === "loaded" && !currentAnalysis && (
+                {currentTranscriptError && (
+                  <div
+                    role="alert"
+                    style={{
+                      marginBottom: 10,
+                      color: colors.danger,
+                      fontSize: 11,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {currentTranscriptError}
+                  </div>
+                )}
+
+                {contextStatus === "loaded" && !currentAnalysis && (
                   <button
                     type="button"
                     onClick={() => void handleFetchTranscript()}
@@ -5652,8 +5803,7 @@ export default function Sidebar({
             error={currentAnalysisError}
             isAnalyzing={isAnalyzing}
             canAnalyze={
-              contextStatus === "loaded" &&
-              currentTranscriptStatus === "READY"
+              contextStatus === "loaded" && currentTranscriptStatus === "READY"
             }
             onAnalyze={() => void handleAnalyzeVideo()}
           />
@@ -5663,12 +5813,8 @@ export default function Sidebar({
         {activeWorkspace === "NOTES" &&
           viewMode === "READER" &&
           selectedNote && (
-          <NoteReader
-            note={selectedNote}
-            colors={colors}
-            showFolderPath
-          />
-        )}
+            <NoteReader note={selectedNote} colors={colors} showFolderPath />
+          )}
 
         {/* WRITER */}
         {activeWorkspace === "NOTES" && viewMode === "WRITER" && (
@@ -5797,3 +5943,20 @@ const smallToolButton: CSSProperties = {
   fontWeight: 700,
   cursor: "pointer",
 };
+
+interface EditorSpecialActionStyle extends CSSProperties {
+  "--editor-special-action-hover": string;
+}
+
+function editorSpecialActionStyle(
+  colors: ThemeColors,
+): EditorSpecialActionStyle {
+  return {
+    ...smallToolButton,
+    color: colors.videoActionText,
+    borderColor: colors.accent,
+    background: colors.videoActionBackground,
+    fontWeight: 650,
+    "--editor-special-action-hover": colors.videoActionHoverBackground,
+  };
+}
