@@ -2,6 +2,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type FormEvent,
   type Ref,
 } from "react";
 import {
@@ -12,6 +13,7 @@ import {
   BookOpen,
   Clapperboard,
   Clock3,
+  ExternalLink,
   FileText,
   Folder,
   House,
@@ -45,6 +47,13 @@ import {
   type DashboardData,
   type DashboardNote,
 } from "./dashboardApi";
+import {
+  isRAGAnswer,
+  sendAskRAG,
+  type AskRAGScope,
+  type RAGAnswer,
+  type RAGSource,
+} from "./ragApi";
 import "./dashboard.css";
 
 type DashboardRoute =
@@ -108,8 +117,7 @@ const routeContent: Record<
   knowledge: {
     title: "AI / Knowledge",
     description: "Ask questions grounded in your saved learning.",
-    message:
-      "Grounded AI questions are available in the YouTube sidebar. Open a video to ask about your personal knowledge base.",
+    message: "",
   },
 };
 
@@ -372,7 +380,11 @@ function Dashboard() {
             <div>
               <p className="eyebrow">YOUR LEARNING SPACE</p>
               <h1 ref={pageHeadingRef} tabIndex={-1}>
-                {route === "dashboard" ? "Your learning space" : pageTitle}
+                {route === "dashboard"
+                  ? "Your learning space"
+                  : route === "knowledge"
+                    ? "AI Knowledge"
+                    : pageTitle}
               </h1>
               <p className="page-description">{pageDescription}</p>
             </div>
@@ -410,6 +422,8 @@ function Dashboard() {
                 window.location.hash = `#/notes/${noteId}`;
               }}
             />
+          ) : route === "knowledge" ? (
+            <DashboardKnowledgeWorkspace dashboardState={dashboardState} />
           ) : (
             <WorkspacePlaceholder route={route} />
           )}
@@ -1706,6 +1720,489 @@ function formatTimestamp(seconds: number): string {
   return hours > 0
     ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`
     : `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+}
+
+type DashboardVideoContext = {
+  youtubeId: string;
+  databaseId: number | null;
+  title: string;
+  channelName: string;
+  thumbnailUrl: string | null;
+};
+
+const YOUTUBE_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
+
+function getDashboardVideoContexts(
+  dashboardState: DashboardState,
+): DashboardVideoContext[] {
+  if (dashboardState.status !== "ready") return [];
+
+  const contexts = new Map<string, DashboardVideoContext>();
+  for (const note of dashboardState.data.notes) {
+    const metadata = note.video_detail;
+    if (note.video === null || !metadata || metadata.youtube_id === undefined) {
+      continue;
+    }
+    const youtubeId = metadata.youtube_id;
+    if (!YOUTUBE_ID_PATTERN.test(youtubeId)) continue;
+
+    const candidate: DashboardVideoContext = {
+      youtubeId,
+      databaseId: metadata.id ?? note.video ?? null,
+      title: metadata.title?.trim() || "Untitled video",
+      channelName:
+        metadata.channel_name?.trim() ||
+        metadata.channel_handle?.trim() ||
+        "",
+      thumbnailUrl: safeExternalHttpUrl(metadata.thumbnail_url),
+    };
+    const existing = contexts.get(youtubeId);
+    if (
+      !existing ||
+      (existing.title === "Untitled video" &&
+        candidate.title !== "Untitled video") ||
+      (!existing.thumbnailUrl && candidate.thumbnailUrl)
+    ) {
+      contexts.set(youtubeId, candidate);
+    }
+  }
+  return [...contexts.values()];
+}
+
+function getKnowledgeErrorMessage(status: number): string {
+  if (status === 400) {
+    return "Check your question and video context, then try again.";
+  }
+  if (status === 401 || status === 403) {
+    return "Your session is not authorized. Sign in again and retry.";
+  }
+  if (status === 404) {
+    return "That video context is unavailable to your account.";
+  }
+  if (status === 502) {
+    return "The AI service could not generate an answer. Please try again.";
+  }
+  if (status === 0) {
+    return "Could not reach the Knowledge service. Check your connection and retry.";
+  }
+  return "The Knowledge service is temporarily unavailable. Please try again.";
+}
+
+function sourceTypeLabel(source: RAGSource): string {
+  const sourceType = source.metadata.source_type;
+  if (sourceType === "NOTE") return "Note";
+  if (sourceType === "VIDEO_TRANSCRIPT") return "Video transcript";
+  if (sourceType === "VIDEO_ANALYSIS") return "Video analysis";
+  return source.video_id === null ? "Personal knowledge" : "Video knowledge";
+}
+
+function metadataTimestamp(source: RAGSource): number | null {
+  if (source.metadata.source_type !== "VIDEO_TRANSCRIPT") return null;
+  const seconds = source.metadata.start_seconds;
+  return typeof seconds === "number" &&
+    Number.isFinite(seconds) &&
+    seconds >= 0
+    ? Math.floor(seconds)
+    : null;
+}
+
+function DashboardKnowledgeWorkspace({
+  dashboardState,
+}: {
+  dashboardState: DashboardState;
+}) {
+  const videos = getDashboardVideoContexts(dashboardState);
+  const notes =
+    dashboardState.status === "ready" ? dashboardState.data.notes : [];
+  const [scope, setScope] = useState<AskRAGScope>("PERSONAL_KB");
+  const [youtubeId, setYoutubeId] = useState<string | null>(null);
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState<RAGAnswer | null>(null);
+  const [answeredScope, setAnsweredScope] = useState<AskRAGScope | null>(null);
+  const [answeredYoutubeId, setAnsweredYoutubeId] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const normalizedYoutubeId = (youtubeId ?? videos[0]?.youtubeId ?? "").trim();
+  const validVideoContext = YOUTUBE_ID_PATTERN.test(normalizedYoutubeId);
+  const canAsk =
+    question.trim().length > 0 &&
+    (scope === "PERSONAL_KB" || validVideoContext) &&
+    !isLoading;
+
+  function clearResult() {
+    setAnswer(null);
+    setAnsweredScope(null);
+    setAnsweredYoutubeId("");
+    setError(null);
+  }
+
+  async function handleAsk(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canAsk) return;
+
+    const submittedScope = scope;
+    const submittedYoutubeId =
+      submittedScope === "PERSONAL_KB" ? "" : normalizedYoutubeId;
+    setIsLoading(true);
+    clearResult();
+
+    try {
+      const response = await sendAskRAG(
+        question.trim(),
+        submittedScope,
+        submittedYoutubeId,
+      );
+      if (!response.success) {
+        setError(getKnowledgeErrorMessage(response.status));
+        return;
+      }
+      if (!isRAGAnswer(response.data)) {
+        setError("The Knowledge service returned an unexpected response.");
+        return;
+      }
+
+      setAnswer(response.data);
+      setAnsweredScope(submittedScope);
+      setAnsweredYoutubeId(submittedYoutubeId);
+    } catch {
+      setError(
+        "Could not reach the Knowledge service. Check your connection and retry.",
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  function sourceVideo(source: RAGSource): DashboardVideoContext | null {
+    const note = notes.find((item) => item.id === source.note_id);
+    const noteVideo = note?.video_detail;
+    const noteVideoId = noteVideo?.youtube_id;
+    if (noteVideoId && YOUTUBE_ID_PATTERN.test(noteVideoId)) {
+      return videos.find((video) => video.youtubeId === noteVideoId) ?? {
+        youtubeId: noteVideoId,
+        databaseId: noteVideo?.id ?? note?.video ?? null,
+        title: noteVideo?.title?.trim() || "Video",
+        channelName:
+          noteVideo?.channel_name?.trim() ||
+          noteVideo?.channel_handle?.trim() ||
+          "",
+        thumbnailUrl: safeExternalHttpUrl(noteVideo?.thumbnail_url),
+      };
+    }
+
+    const matchedVideo = videos.find(
+      (video) =>
+        source.video_id !== null && video.databaseId === source.video_id,
+    );
+    if (matchedVideo) return matchedVideo;
+
+    if (
+      answeredScope === "CURRENT_VIDEO" &&
+      source.video_id !== null &&
+      YOUTUBE_ID_PATTERN.test(answeredYoutubeId)
+    ) {
+      return {
+        youtubeId: answeredYoutubeId,
+        databaseId: source.video_id,
+        title: "Selected video",
+        channelName: "",
+        thumbnailUrl: null,
+      };
+    }
+    return null;
+  }
+
+  return (
+    <section className="knowledge-workspace" aria-labelledby="knowledge-heading">
+      <div className="content-card knowledge-question-card">
+        <div className="knowledge-card-heading">
+          <span className="knowledge-icon">
+            <Brain size={19} aria-hidden="true" />
+          </span>
+          <div>
+            <h2 id="knowledge-heading">Ask your knowledge</h2>
+            <p>
+              Answers are grounded in the notes and video knowledge available
+              in the selected context.
+            </p>
+          </div>
+        </div>
+
+        <form className="knowledge-form" onSubmit={(event) => void handleAsk(event)}>
+          <label className="knowledge-field">
+            <span>Knowledge context</span>
+            <select
+              value={scope}
+              disabled={isLoading}
+              onChange={(event) => {
+                const nextScope = event.target.value;
+                if (
+                  nextScope === "CURRENT_VIDEO" ||
+                  nextScope === "PERSONAL_KB" ||
+                  nextScope === "COMBINED"
+                ) {
+                  setScope(nextScope);
+                  clearResult();
+                }
+              }}
+            >
+              <option value="CURRENT_VIDEO">Current Video</option>
+              <option value="PERSONAL_KB">My Knowledge</option>
+              <option value="COMBINED">Video + My Knowledge</option>
+            </select>
+          </label>
+
+          {scope !== "PERSONAL_KB" && (
+            <div className="knowledge-video-context">
+              <label className="knowledge-field" htmlFor="knowledge-video-id">
+                <span>YouTube video ID</span>
+                <input
+                  id="knowledge-video-id"
+                  type="text"
+                  list="dashboard-knowledge-videos"
+                  value={youtubeId ?? videos[0]?.youtubeId ?? ""}
+                  placeholder="Enter an 11-character YouTube ID"
+                  autoComplete="off"
+                  disabled={isLoading}
+                  aria-invalid={normalizedYoutubeId.length > 0 && !validVideoContext}
+                  aria-describedby="knowledge-video-help"
+                  onChange={(event) => {
+                    setYoutubeId(event.target.value);
+                    clearResult();
+                  }}
+                />
+                <datalist id="dashboard-knowledge-videos">
+                  {videos.map((video) => (
+                    <option
+                      key={video.youtubeId}
+                      value={video.youtubeId}
+                      label={video.title}
+                    />
+                  ))}
+                </datalist>
+                <span id="knowledge-video-help" className="knowledge-field-help">
+                  {validVideoContext
+                    ? "Use a saved video suggestion or enter another valid YouTube ID."
+                    : "Choose a saved video suggestion or enter a valid 11-character ID."}
+                </span>
+              </label>
+
+              {validVideoContext && (
+                <div className="knowledge-video-preview">
+                  {(() => {
+                    const selectedVideo = videos.find(
+                      (video) => video.youtubeId === normalizedYoutubeId,
+                    );
+                    return (
+                      <>
+                        {selectedVideo?.thumbnailUrl ? (
+                          <img
+                            src={selectedVideo.thumbnailUrl}
+                            alt=""
+                            loading="lazy"
+                          />
+                        ) : (
+                          <span className="knowledge-video-placeholder">
+                            <Video size={18} aria-hidden="true" />
+                          </span>
+                        )}
+                        <div>
+                          <strong>
+                            {selectedVideo?.title || "Selected YouTube video"}
+                          </strong>
+                          {selectedVideo?.channelName && (
+                            <span>{selectedVideo.channelName}</span>
+                          )}
+                          <code>{normalizedYoutubeId}</code>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+          )}
+
+          <label className="knowledge-field" htmlFor="knowledge-question">
+            <span>Your question</span>
+            <textarea
+              id="knowledge-question"
+              value={question}
+              rows={5}
+              placeholder="Ask a question about your notes or video knowledge..."
+              disabled={isLoading}
+              onChange={(event) => {
+                setQuestion(event.target.value);
+                setError(null);
+              }}
+            />
+          </label>
+
+          {error && (
+            <div className="knowledge-error" role="alert">
+              <AlertCircle size={17} aria-hidden="true" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <div className="knowledge-form-footer">
+            <span>
+              {scope === "PERSONAL_KB"
+                ? "Searching your personal knowledge"
+                : scope === "CURRENT_VIDEO"
+                  ? "Searching knowledge for the selected video"
+                  : "Searching the video and your personal knowledge"}
+            </span>
+            <button
+              className="knowledge-ask-button"
+              type="submit"
+              disabled={!canAsk}
+            >
+              {isLoading ? (
+                <>
+                  <RefreshCw className="is-spinning" size={16} aria-hidden="true" />
+                  Generating...
+                </>
+              ) : error ? (
+                <>
+                  <RefreshCw size={16} aria-hidden="true" />
+                  Try again
+                </>
+              ) : (
+                <>
+                  <Sparkles size={16} aria-hidden="true" />
+                  Ask AI
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <section
+        className="content-card knowledge-answer-card"
+        aria-labelledby="knowledge-answer-heading"
+        aria-busy={isLoading}
+      >
+        <div className="card-heading">
+          <div>
+            <div className="card-title-row">
+              <span className="section-icon">
+                <Sparkles size={16} aria-hidden="true" />
+              </span>
+              <h2 id="knowledge-answer-heading">Answer</h2>
+            </div>
+            <p>
+              {answeredScope === null
+                ? "Your answer will appear here."
+                : answeredScope === "CURRENT_VIDEO"
+                  ? "Grounded in the selected video."
+                  : answeredScope === "PERSONAL_KB"
+                    ? "Grounded in your personal knowledge."
+                    : "Grounded in the selected video and your knowledge."}
+            </p>
+          </div>
+        </div>
+
+        {isLoading ? (
+          <div className="knowledge-answer-loading" role="status">
+            <span />
+            <span />
+            <span />
+            <p>Searching sources and preparing an answer...</p>
+          </div>
+        ) : answer ? (
+          <>
+            <p className="knowledge-answer-text">{answer.answer}</p>
+            <div className="knowledge-sources">
+              <div className="knowledge-sources-heading">
+                <h3>Sources</h3>
+                <span>
+                  {answer.sources.length}{" "}
+                  {answer.sources.length === 1 ? "source" : "sources"}
+                </span>
+              </div>
+              {answer.sources.length === 0 ? (
+                <p className="knowledge-no-sources">
+                  No matching sources were found for this question and context.
+                  Try another question or choose a different context.
+                </p>
+              ) : (
+                <div className="knowledge-source-list">
+                  {answer.sources.map((source, index) => {
+                    const note = notes.find(
+                      (item) => item.id === source.note_id,
+                    );
+                    const video = sourceVideo(source);
+                    const timestamp = metadataTimestamp(source);
+                    const timestampUrl =
+                      timestamp === null
+                        ? null
+                        : getYoutubeWatchUrl(video?.youtubeId, timestamp);
+                    const section =
+                      typeof source.metadata.section === "string"
+                        ? source.metadata.section.replaceAll("_", " ")
+                        : null;
+
+                    return (
+                      <article
+                        className="knowledge-source"
+                        key={`${source.chunk_id}-${index}`}
+                      >
+                        <div className="knowledge-source-heading">
+                          <div>
+                            <span className="knowledge-source-type">
+                              {sourceTypeLabel(source)}
+                            </span>
+                            {(note?.title || video?.title || section) && (
+                              <strong>
+                                {note?.title ||
+                                  (video?.title !== "Selected video"
+                                    ? video?.title
+                                    : null) ||
+                                  section ||
+                                  "Video"}
+                              </strong>
+                            )}
+                          </div>
+                          {timestampUrl && timestamp !== null && (
+                            <a
+                              className="knowledge-timestamp-link"
+                              href={timestampUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <Clock3 size={13} aria-hidden="true" />
+                              Open at {formatTimestamp(timestamp)}
+                              <ExternalLink size={12} aria-hidden="true" />
+                            </a>
+                          )}
+                        </div>
+                        <p className="knowledge-source-excerpt">
+                          {source.content}
+                        </p>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </>
+        ) : error ? (
+          <p className="knowledge-answer-prompt">
+            Review the context and question above, then retry.
+          </p>
+        ) : (
+          <div className="knowledge-answer-prompt">
+            <span className="knowledge-prompt-icon">
+              <BookOpen size={20} aria-hidden="true" />
+            </span>
+            <p>Ask a question to see a grounded answer and its sources.</p>
+          </div>
+        )}
+      </section>
+    </section>
+  );
 }
 
 function WorkspacePlaceholder({ route }: { route: DashboardRoute }) {

@@ -15,6 +15,49 @@ export interface RAGAnswer {
   sources: RAGSource[];
 }
 
+export function isRAGAnswer(value: unknown): value is RAGAnswer {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const answer = value as Record<string, unknown>;
+  return (
+    typeof answer.answer === "string" &&
+    Array.isArray(answer.sources) &&
+    answer.sources.every((value) => {
+      if (
+        typeof value !== "object" ||
+        value === null ||
+        Array.isArray(value)
+      ) {
+        return false;
+      }
+
+      const source = value as Record<string, unknown>;
+      const nullableInteger = (field: unknown) =>
+        field === null ||
+        (typeof field === "number" && Number.isInteger(field));
+      return (
+        typeof source.chunk_id === "number" &&
+        Number.isInteger(source.chunk_id) &&
+        typeof source.content === "string" &&
+        typeof source.distance === "number" &&
+        Number.isFinite(source.distance) &&
+        nullableInteger(source.note_id) &&
+        nullableInteger(source.video_id) &&
+        nullableInteger(source.folder_id) &&
+        (source.source_block_id === null ||
+          typeof source.source_block_id === "string") &&
+        typeof source.chunk_index === "number" &&
+        Number.isInteger(source.chunk_index) &&
+        typeof source.metadata === "object" &&
+        source.metadata !== null &&
+        !Array.isArray(source.metadata)
+      );
+    })
+  );
+}
+
 export interface AskRAGResponse {
   success: boolean;
   status: number;
