@@ -13,11 +13,10 @@ class RAGQuestionSerializer(serializers.Serializer):
         choices=[(scope.name, scope.name) for scope in RetrievalScope],
         required=True,
     )
-    youtube_id = serializers.CharField(
+    youtube_id = serializers.RegexField(
+        regex=r"^[A-Za-z0-9_-]{11}$",
         required=False,
         allow_null=True,
-        allow_blank=False,
-        max_length=20,
     )
     folder_id = serializers.IntegerField(
         required=False,
@@ -32,13 +31,40 @@ class RAGQuestionSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         scope = RetrievalScope[attrs["scope"]]
-        if scope is RetrievalScope.CURRENT_VIDEO and not attrs.get("youtube_id"):
+        youtube_id = attrs.get("youtube_id")
+        folder_id = attrs.get("folder_id")
+
+        if (
+            scope in (RetrievalScope.CURRENT_VIDEO, RetrievalScope.COMBINED)
+            and youtube_id is None
+        ):
             raise serializers.ValidationError({
-                "youtube_id": "This field is required for CURRENT_VIDEO."
+                "youtube_id": (
+                    f"This field is required for {scope.name}."
+                )
             })
-        if scope is RetrievalScope.CURRENT_FOLDER and attrs.get("folder_id") is None:
+        if (
+            scope is RetrievalScope.CURRENT_FOLDER
+            and folder_id is None
+        ):
             raise serializers.ValidationError({
                 "folder_id": "This field is required for CURRENT_FOLDER."
+            })
+        if (
+            scope in (RetrievalScope.PERSONAL_KB, RetrievalScope.CURRENT_FOLDER)
+            and youtube_id is not None
+        ):
+            raise serializers.ValidationError({
+                "youtube_id": (
+                    f"This field is not valid for {scope.name}."
+                )
+            })
+        if (
+            scope in (RetrievalScope.PERSONAL_KB, RetrievalScope.CURRENT_VIDEO)
+            and folder_id is not None
+        ):
+            raise serializers.ValidationError({
+                "folder_id": f"This field is not valid for {scope.name}."
             })
         return attrs
 

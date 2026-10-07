@@ -21,6 +21,7 @@ from knowledge.services.previous_context import (
 )
 from knowledge.services.rag import answer_question
 from knowledge.services.retrieval import (
+    KnowledgeContextAccessError,
     KnowledgeRetrievalError,
     RetrievalRequest,
     RetrievalScope,
@@ -40,9 +41,7 @@ class KnowledgeAskView(APIView):
 
         video = None
         folder = None
-        if scope is RetrievalScope.CURRENT_VIDEO or (
-            scope is RetrievalScope.COMBINED and values.get("youtube_id")
-        ):
+        if scope in (RetrievalScope.CURRENT_VIDEO, RetrievalScope.COMBINED):
             try:
                 video = Video.objects.get(youtube_id=values["youtube_id"])
             except Video.DoesNotExist:
@@ -73,6 +72,8 @@ class KnowledgeAskView(APIView):
                 request=retrieval_request,
                 top_k=values["top_k"],
             )
+        except KnowledgeContextAccessError:
+            raise NotFound("Not found.") from None
         except KnowledgeRetrievalError:
             return Response(
                 {"detail": "The knowledge retrieval request could not be completed."},

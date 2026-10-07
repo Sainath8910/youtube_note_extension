@@ -6,6 +6,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from folders.models import Folder
+from knowledge.models import KnowledgeChunk
 from knowledge.services.context import RAGContextItem
 from knowledge.services.generation import RAGAnswer, RAGGenerationError
 from knowledge.services.retrieval import KnowledgeRetrievalError, RetrievalScope
@@ -32,6 +33,8 @@ class KnowledgeAskAPITests(APITestCase):
         payload = {
             "question": "What is binary search?",
             "scope": "PERSONAL_KB",
+            "youtube_id": None,
+            "folder_id": None,
         }
         payload.update(overrides)
         return payload
@@ -83,12 +86,12 @@ class KnowledgeAskAPITests(APITestCase):
         self.assertIsNone(request.folder)
 
     @patch("knowledge.views.answer_question")
-    def test_combined_scope_resolves_optional_video_and_owned_folder(
+    def test_combined_scope_resolves_video_and_owned_folder(
         self,
         answer_question,
     ):
         answer_question.return_value = self.answer
-        video = Video.objects.create(youtube_id="combinedvideo1")
+        video = Video.objects.create(youtube_id="combined001")
         folder = Folder.objects.create(user=self.user, name="Combined folder")
 
         response = self.client.post(
@@ -109,9 +112,7 @@ class KnowledgeAskAPITests(APITestCase):
         self.assertEqual(request.folder.pk, folder.pk)
 
     @patch("knowledge.views.answer_question")
-    def test_combined_scope_can_omit_context(self, answer_question):
-        answer_question.return_value = self.answer
-
+    def test_combined_scope_requires_video_context(self, answer_question):
         response = self.client.post(
             ASK_URL,
             {
@@ -121,11 +122,8 @@ class KnowledgeAskAPITests(APITestCase):
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        request = answer_question.call_args.kwargs["request"]
-        self.assertEqual(request.scope, RetrievalScope.COMBINED)
-        self.assertIsNone(request.video)
-        self.assertIsNone(request.folder)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        answer_question.assert_not_called()
 
     @patch("knowledge.views.answer_question")
     def test_missing_current_video_returns_404(self, answer_question):
@@ -141,6 +139,60 @@ class KnowledgeAskAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         answer_question.assert_not_called()
+
+    @patch("knowledge.views.answer_question")
+    def test_malformed_youtube_id_is_rejected(self, answer_question):
+        response = self.client.post(
+            ASK_URL,
+            {
+                "question": "Explain this video",
+                "scope": "CURRENT_VIDEO",
+                "youtube_id": "17",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        answer_question.assert_not_called()
+
+    @patch("knowledge.views.answer_question")
+    def test_personal_scope_rejects_video_context(self, answer_question):
+        response = self.client.post(
+            ASK_URL,
+            self.personal_kb_payload(youtube_id="askvideo001"),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        answer_question.assert_not_called()
+
+    def test_video_context_associated_only_with_another_user_is_hidden(self):
+        video = Video.objects.create(youtube_id="askvideo001")
+        KnowledgeChunk.objects.create(
+            user=self.other_user,
+            video=video,
+            content="Private source",
+            content_type=KnowledgeChunk.ContentType.TRANSCRIPT_CHUNK,
+            source_type=KnowledgeChunk.SourceType.VIDEO_TRANSCRIPT,
+        )
+
+        with patch(
+            "knowledge.services.retrieval.get_embedding_service"
+        ) as embedding_service:
+            response = self.client.post(
+                ASK_URL,
+                {
+                    "question": "Explain this video",
+                    "scope": "CURRENT_VIDEO",
+                    "youtube_id": video.youtube_id,
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.data["detail"], "Not found.")
+        self.assertNotIn("Private source", str(response.data))
+        embedding_service.assert_not_called()
 
     @patch("knowledge.views.answer_question")
     def test_current_folder_uses_exact_owned_folder(self, answer_question):
@@ -353,7 +405,12 @@ class KnowledgeAskAPITests(APITestCase):
                     folder_id=41,
                     source_block_id="block-first",
                     chunk_index=2,
-                    metadata={"position": "first", "nested": {"ok": True}},
+                    metadata={
+                        "position": "first",
+                        "start_seconds": 12.5,
+                        "end_seconds": 18.0,
+                        "nested": {"ok": True},
+                    },
                 ),
                 RAGContextItem(
                     chunk_id=102,
@@ -386,7 +443,12 @@ class KnowledgeAskAPITests(APITestCase):
                 "folder_id": 41,
                 "source_block_id": "block-first",
                 "chunk_index": 2,
-                "metadata": {"position": "first", "nested": {"ok": True}},
+                "metadata": {
+                    "position": "first",
+                    "start_seconds": 12.5,
+                    "end_seconds": 18.0,
+                    "nested": {"ok": True},
+                },
             },
             {
                 "chunk_id": 102,

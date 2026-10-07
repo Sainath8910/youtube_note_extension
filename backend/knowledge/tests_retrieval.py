@@ -131,6 +131,30 @@ class KnowledgeRetrievalTests(TestCase):
         self.assertEqual([result.chunk.pk for result in results], [own_chunk.pk])
         self.assertTrue(all(result.chunk.user_id == self.user.id for result in results))
 
+    def test_personal_context_never_returns_another_users_chunks(self):
+        own_chunk = self.create_chunk(
+            content="My private learning",
+            embedding=axis_vector(0),
+        )
+        self.create_chunk(
+            user=self.other_user,
+            content="Another user's private learning",
+            embedding=axis_vector(0),
+        )
+
+        results = retrieve_scoped_knowledge(
+            RetrievalRequest(
+                user=self.user,
+                query="private learning",
+                scope=RetrievalScope.PERSONAL_KB,
+            )
+        )
+
+        self.assertEqual([result.chunk.pk for result in results], [own_chunk.pk])
+        self.assertTrue(
+            all(result.chunk.user_id == self.user.pk for result in results)
+        )
+
     def test_null_embeddings_are_ignored(self):
         embedded = self.create_chunk(embedding=axis_vector(0))
         self.create_chunk(content="No embedding", embedding=None)

@@ -25,12 +25,17 @@ class KnowledgeRetrievalError(Exception):
     """Raised when a retrieval request or its query embedding is invalid."""
 
 
+class KnowledgeContextAccessError(KnowledgeRetrievalError):
+    """Raised when a requested video or folder context is not accessible."""
+
+
 class RetrievalScope(StrEnum):
     """Candidate-source scopes supported by knowledge retrieval.
 
-    CURRENT_VIDEO and CURRENT_FOLDER require their corresponding context.
-    PERSONAL_KB ignores optional video and folder context. COMBINED prioritizes
-    current-video candidates before personal knowledge when a video is supplied.
+    CURRENT_VIDEO and CURRENT_FOLDER restrict candidates to the exact context.
+    PERSONAL_KB searches the authenticated user's knowledge corpus. COMBINED
+    prioritizes the selected video's candidates before that user's broader
+    knowledge corpus.
     """
 
     CURRENT_VIDEO = "current_video"
@@ -111,7 +116,7 @@ def _validate_context_ownership(
     from their user-owned notes and knowledge chunks.
     """
     if folder is not None and folder.user_id != user.pk:
-        raise KnowledgeRetrievalError(
+        raise KnowledgeContextAccessError(
             "The supplied folder does not belong to the requesting user."
         )
 
@@ -125,7 +130,7 @@ def _validate_context_ownership(
             or video.knowledge_chunks.exclude(user=user).exists()
         )
         if has_other_user_video_context and not has_user_video_context:
-            raise KnowledgeRetrievalError(
+            raise KnowledgeContextAccessError(
                 "The supplied video is associated with another user's data."
             )
 
@@ -233,10 +238,11 @@ def retrieve_scoped_knowledge(
     """Retrieve candidates using the requested scope.
 
     CURRENT_VIDEO and CURRENT_FOLDER restrict candidates to their exact
-    context. PERSONAL_KB ignores optional video/folder fields. COMBINED
-    prioritizes current-video results, then fills remaining slots from
-    personal knowledge when a video is supplied. Without a video, its existing
-    optional-folder behavior is preserved.
+    context. PERSONAL_KB searches only the authenticated user's chunks.
+    COMBINED prioritizes the selected video's results, then fills remaining
+    slots from that user's broader knowledge corpus. The ask API requires a
+    YouTube ID for CURRENT_VIDEO and COMBINED; direct service callers retain
+    the existing optional-context behavior for COMBINED.
     """
     if not isinstance(request, RetrievalRequest):
         raise KnowledgeRetrievalError(
