@@ -50,6 +50,8 @@ import {
 } from "./dashboardApi";
 import {
   createDashboardFolder,
+  getDashboardFolder,
+  getDashboardFolderNotes,
   listDashboardFolders,
   type DashboardFolder,
 } from "./folderApi";
@@ -91,6 +93,7 @@ type NoteWorkspaceLocation =
 interface DashboardLocation {
   route: DashboardRoute;
   noteWorkspace: NoteWorkspaceLocation;
+  folderId: number | null;
 }
 
 type DashboardState =
@@ -142,14 +145,34 @@ const routeContent: Record<
 function locationFromHash(): DashboardLocation {
   const path = window.location.hash.replace(/^#\/?/, "").split("?")[0];
   if (path === "notes/new") {
-    return { route: "notes", noteWorkspace: { mode: "new" } };
+    return {
+      route: "notes",
+      noteWorkspace: { mode: "new" },
+      folderId: null,
+    };
   }
 
   const noteMatch = path.match(/^notes\/(\d+)$/);
   if (noteMatch) {
     const noteId = Number(noteMatch[1]);
     if (Number.isSafeInteger(noteId) && noteId > 0) {
-      return { route: "notes", noteWorkspace: { mode: "existing", noteId } };
+      return {
+        route: "notes",
+        noteWorkspace: { mode: "existing", noteId },
+        folderId: null,
+      };
+    }
+  }
+
+  const folderMatch = path.match(/^folders\/(\d+)$/);
+  if (folderMatch) {
+    const folderId = Number(folderMatch[1]);
+    if (Number.isSafeInteger(folderId) && folderId > 0) {
+      return {
+        route: "folders",
+        noteWorkspace: null,
+        folderId,
+      };
     }
   }
 
@@ -158,6 +181,7 @@ function locationFromHash(): DashboardLocation {
       ? (path as DashboardRoute)
       : "dashboard",
     noteWorkspace: null,
+    folderId: null,
   };
 }
 
@@ -302,7 +326,9 @@ function Dashboard() {
       ? "A clear view of the notes and ideas you collect while learning."
       : route === "notes"
         ? "Your saved notes, collected from the YouTube learning sidebar."
-        : routeContent[route].description;
+        : route === "folders" && location.folderId !== null
+          ? "Notes saved in this folder."
+          : routeContent[route].description;
 
   if (location.noteWorkspace) {
     const workspaceLocation = location.noteWorkspace;
@@ -441,7 +467,17 @@ function Dashboard() {
               }}
             />
           ) : route === "folders" ? (
-            <FoldersPage />
+            location.folderId === null ? (
+              <FoldersPage />
+            ) : (
+              <FolderDetailPage
+                key={location.folderId}
+                folderId={location.folderId}
+                onOpenNote={(noteId) => {
+                  window.location.hash = `#/notes/${noteId}`;
+                }}
+              />
+            )
           ) : route === "knowledge" ? (
             <DashboardKnowledgeWorkspace dashboardState={dashboardState} />
           ) : (
@@ -1874,6 +1910,30 @@ function NotesListState({
   }
 
   return (
+    <NoteRows
+      notes={notes}
+      onSelectNote={onSelectNote}
+      compact={compact}
+      totalNotes={dashboardState.data.totalNotes}
+      onViewNotes={onViewNotes}
+    />
+  );
+}
+
+function NoteRows({
+  notes,
+  onSelectNote,
+  compact = false,
+  totalNotes,
+  onViewNotes,
+}: {
+  notes: VideoNote[];
+  onSelectNote?: (noteId: number) => void;
+  compact?: boolean;
+  totalNotes?: number;
+  onViewNotes?: () => void;
+}) {
+  return (
     <div className={`notes-list${compact ? " is-compact" : ""}`}>
       {notes.map((note) => {
         const rowContent = (
@@ -1928,13 +1988,14 @@ function NotesListState({
         );
       })}
       {compact &&
-        dashboardState.status === "ready" &&
-        dashboardState.data.totalNotes > notes.length && (
-        <button className="notes-view-more" type="button" onClick={onViewNotes}>
-          View all {dashboardState.data.totalNotes} notes
-          <ArrowUpRight size={14} aria-hidden="true" />
-        </button>
-      )}
+        totalNotes !== undefined &&
+        totalNotes > notes.length &&
+        onViewNotes && (
+          <button className="notes-view-more" type="button" onClick={onViewNotes}>
+            View all {totalNotes} notes
+            <ArrowUpRight size={14} aria-hidden="true" />
+          </button>
+        )}
     </div>
   );
 }
@@ -3010,7 +3071,12 @@ function FoldersPage() {
       ) : (
         <div className="folder-list">
           {folderState.folders.map((folder) => (
-            <article className="folder-row" key={folder.id}>
+            <a
+              className="folder-row"
+              href={`#/folders/${folder.id}`}
+              key={folder.id}
+              aria-label={`Open folder: ${folder.name}`}
+            >
               <span className="folder-row-icon">
                 <Folder size={18} aria-hidden="true" />
               </span>
@@ -3018,11 +3084,194 @@ function FoldersPage() {
                 <h3>{folder.name}</h3>
                 {folder.description.trim() && <p>{folder.description}</p>}
               </div>
-            </article>
+              <ArrowUpRight
+                className="folder-row-arrow"
+                size={16}
+                aria-hidden="true"
+              />
+            </a>
           ))}
         </div>
       )}
     </section>
+  );
+}
+
+type FolderDetailState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; folder: DashboardFolder };
+
+type FolderNotesState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; notes: DashboardNote[] };
+
+function FolderDetailPage({
+  folderId,
+  onOpenNote,
+}: {
+  folderId: number;
+  onOpenNote: (noteId: number) => void;
+}) {
+  const [folderState, setFolderState] = useState<FolderDetailState>({
+    status: "loading",
+  });
+  const [notesState, setNotesState] = useState<FolderNotesState>({
+    status: "loading",
+  });
+  const [folderRetryCount, setFolderRetryCount] = useState(0);
+  const [notesRetryCount, setNotesRetryCount] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    getDashboardFolder(folderId)
+      .then((folder) => {
+        if (active) setFolderState({ status: "ready", folder });
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setFolderState({
+          status: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Folder not found or unavailable.",
+        });
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [folderId, folderRetryCount]);
+
+  useEffect(() => {
+    if (folderState.status !== "ready") return;
+    let active = true;
+    getDashboardFolderNotes(folderId)
+      .then((notes) => {
+        if (active) setNotesState({ status: "ready", notes });
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setNotesState({
+          status: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Could not load notes in this folder.",
+        });
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [folderId, folderState.status, folderRetryCount, notesRetryCount]);
+
+  const retryFolder = () => {
+    setFolderState({ status: "loading" });
+    setNotesState({ status: "loading" });
+    setFolderRetryCount((count) => count + 1);
+  };
+
+  const retryNotes = () => {
+    setNotesState({ status: "loading" });
+    setNotesRetryCount((count) => count + 1);
+  };
+
+  return (
+    <div className="folder-detail-page">
+      <a className="workspace-back-button folder-back-link" href="#/folders">
+        <ArrowLeft size={17} aria-hidden="true" />
+        <span>Back to Folders</span>
+      </a>
+
+      {folderState.status === "loading" ? (
+        <section
+          className="content-card folder-detail-loading"
+          role="status"
+          aria-label="Loading folder"
+        >
+          <span />
+          <span />
+        </section>
+      ) : folderState.status === "error" ? (
+        <section className="content-card" role="alert">
+          <div className="inline-state error-state">
+            <AlertCircle size={19} aria-hidden="true" />
+            <div>
+              <strong>Folder not found or unavailable</strong>
+              <p>{folderState.message}</p>
+              <button
+                className="inline-action"
+                type="button"
+                onClick={retryFolder}
+              >
+                Try again
+              </button>
+            </div>
+          </div>
+        </section>
+      ) : (
+        <>
+          <header className="folder-detail-heading">
+            <h2>{folderState.folder.name}</h2>
+            {folderState.folder.description.trim() && (
+              <p>{folderState.folder.description}</p>
+            )}
+          </header>
+
+          <section className="content-card folder-notes-card">
+            <div className="card-heading">
+              <div className="card-title-row">
+                <span className="section-icon">
+                  <FileText size={16} aria-hidden="true" />
+                </span>
+                <h2>Notes</h2>
+              </div>
+            </div>
+            {notesState.status === "loading" ? (
+              <div
+                className="notes-loading"
+                role="status"
+                aria-label="Loading folder notes"
+              >
+                <span />
+                <span />
+                <span />
+              </div>
+            ) : notesState.status === "error" ? (
+              <div className="inline-state error-state" role="alert">
+                <AlertCircle size={19} aria-hidden="true" />
+                <div>
+                  <strong>Notes could not be loaded</strong>
+                  <p>{notesState.message}</p>
+                  <button
+                    className="inline-action"
+                    type="button"
+                    onClick={retryNotes}
+                  >
+                    Try again
+                  </button>
+                </div>
+              </div>
+            ) : notesState.notes.length === 0 ? (
+              <div className="folder-notes-empty" role="status">
+                <span className="empty-state-icon">
+                  <FileText size={20} aria-hidden="true" />
+                </span>
+                <h3>No notes in this folder yet.</h3>
+              </div>
+            ) : (
+              <NoteRows
+                notes={notesState.notes}
+                onSelectNote={onOpenNote}
+              />
+            )}
+          </section>
+        </>
+      )}
+    </div>
   );
 }
 

@@ -116,19 +116,23 @@ async function respondToConversationRequest(
 }
 
 async function respondToFolderRequest(
+  path: string,
   method: "GET" | "POST",
   sendResponse: (response: unknown) => void,
   data?: unknown,
 ): Promise<void> {
   try {
-    const response = await fetch("http://localhost:8000/api/folders/", {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Dev-User": "devuser",
+    const response = await fetch(
+      `http://localhost:8000/api/folders/${path}`,
+      {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Dev-User": "devuser",
+        },
+        ...(data === undefined ? {} : { body: JSON.stringify(data) }),
       },
-      ...(data === undefined ? {} : { body: JSON.stringify(data) }),
-    });
+    );
     const responseText = await response.text();
     let responseData: unknown = null;
     if (responseText) {
@@ -160,7 +164,7 @@ async function respondToFolderRequest(
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "LIST_FOLDERS") {
-    void respondToFolderRequest("GET", sendResponse);
+    void respondToFolderRequest("", "GET", sendResponse);
     return true;
   }
 
@@ -177,7 +181,33 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       });
       return;
     }
-    void respondToFolderRequest("POST", sendResponse, message.data);
+    void respondToFolderRequest("", "POST", sendResponse, message.data);
+    return true;
+  }
+
+  if (
+    message.type === "GET_FOLDER" ||
+    message.type === "GET_FOLDER_NOTES"
+  ) {
+    const folderId = message.folderId;
+    if (
+      typeof folderId !== "number" ||
+      !Number.isSafeInteger(folderId) ||
+      folderId < 1
+    ) {
+      sendResponse({
+        success: false,
+        status: 400,
+        data: { detail: "A valid folder ID is required." },
+      });
+      return;
+    }
+    const folderPath = `${encodeURIComponent(String(folderId))}/`;
+    const path =
+      message.type === "GET_FOLDER_NOTES"
+        ? `${folderPath}notes/`
+        : folderPath;
+    void respondToFolderRequest(path, "GET", sendResponse);
     return true;
   }
 

@@ -1,3 +1,5 @@
+import { normalizeNote, type DashboardNote } from "./dashboardApi";
+
 export interface DashboardFolder {
   id: number;
   name: string;
@@ -104,4 +106,30 @@ export async function createDashboardFolder(data: {
     throw new Error("The folders API returned invalid folder data.");
   }
   return folder;
+}
+
+export async function getDashboardFolder(
+  folderId: number,
+): Promise<DashboardFolder> {
+  const folder = await sendFolderCommand({
+    type: "GET_FOLDER",
+    folderId,
+  });
+  if (!isFolder(folder)) {
+    throw new Error("The folders API returned invalid folder data.");
+  }
+  return folder;
+}
+
+export async function getDashboardFolderNotes(
+  folderId: number,
+): Promise<DashboardNote[]> {
+  const data = await sendFolderCommand({
+    type: "GET_FOLDER_NOTES",
+    folderId,
+  });
+  if (!Array.isArray(data)) {
+    throw new Error("The folders API returned an invalid notes list.");
+  }
+  return data.map((note, index) => normalizeNote(note, index));
 }

@@ -91,7 +91,7 @@ function normalizeVideoMetadata(
   return metadata;
 }
 
-function normalizeNote(value: unknown, index: number): DashboardNote {
+export function normalizeNote(value: unknown, index: number): DashboardNote {
   if (!isObject(value)) {
     throw new Error(`Note ${index + 1} has an invalid format.`);
   }
