@@ -1,13 +1,25 @@
-# ==============================
+# ============================================================
 # Environment Variables / Secrets
-# ==============================
+# ============================================================
 .env
 .env.*
 !.env.example
 
-# ==============================
+# Secret / credential files
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+credentials.json
+token.json
+service-account.json
+service_account.json
+secrets.json
+
+# ============================================================
 # Python
-# ==============================
+# ============================================================
 __pycache__/
 *.py[cod]
 *$py.class
@@ -23,45 +35,58 @@ ENV/
 # Python packaging
 *.egg
 *.egg-info/
-dist/
-build/
 .eggs/
 pip-wheel-metadata/
-pip-log.txt
-pip-delete-this-directory.txt
+pip-wheel-metadata/
+build/
+dist/
 
-# ==============================
+# Packaging / build metadata
+MANIFEST
+*.manifest
+*.spec
+
+# ============================================================
 # Django
-# ==============================
-*.log
+# ============================================================
+
+# Local database
 db.sqlite3
 db.sqlite3-journal
+*.sqlite
+*.sqlite3
+*.sqlite3-journal
 
-# Django static/media generated files
+# Logs
+*.log
+logs/
+
+# Django generated files
 staticfiles/
 media/
 
-# ==============================
+# ============================================================
 # Testing / Coverage
-# ==============================
+# ============================================================
 .pytest_cache/
 .coverage
 .coverage.*
+coverage.xml
 htmlcov/
 .tox/
 .nox/
 .cache/
-coverage.xml
-*.cover
+.mypy_cache/
+.ruff_cache/
 
-# ==============================
+# ============================================================
 # Jupyter
-# ==============================
+# ============================================================
 .ipynb_checkpoints/
 
-# ==============================
+# ============================================================
 # IDE / Editors
-# ==============================
+# ============================================================
 .vscode/
 .idea/
 *.iml
@@ -69,9 +94,10 @@ coverage.xml
 # VS Code local history
 .history/
 
-# ==============================
-# OS Generated Files
-# ==============================
+# ============================================================
+# Operating System Files
+# ============================================================
+
 # Windows
 Thumbs.db
 Thumbs.db:encryptable
@@ -83,72 +109,47 @@ Desktop.ini
 .AppleDouble
 .LSOverride
 
-# Linux
+# Linux / Unix
 *~
+.nfs*
 
-# ==============================
+# ============================================================
 # Node.js / JavaScript
-# ==============================
+# ============================================================
 node_modules/
+
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Build output
+# ============================================================
+# Frontend / Extension Build Artifacts
+# ============================================================
+
+# Generic build output
 dist/
 build/
 out/
 
-# ==============================
-# Frontend / Extension Builds
-# ==============================
+# Extension build output
+extension/dist/
+extension/build/
+
+# Chrome unpacked/build artifacts
+chrome-extension/dist/
+chrome-extension/build/
+
+# Packaged browser extensions
 *.zip
 *.crx
 *.xpi
 
-# Extension build artifacts
-extension/dist/
-extension/build/
-
-# ==============================
-# Browser Extension Files
-# ==============================
-# Chrome extension unpacked/build output
-chrome-extension/dist/
-chrome-extension/build/
-
-# ==============================
-# Temporary Files
-# ==============================
-*.tmp
-*.temp
-*.swp
-*.swo
-*.bak
-*.backup
-
-# ==============================
-# Logs
-# ==============================
-logs/
-*.log
-
-# ==============================
-# Local Development Data
-# ==============================
-*.sqlite
-*.sqlite3
-*.sqlite3-journal
-
-# ==============================
+# ============================================================
 # AI / ML / Embeddings
-# ==============================
-# Generated vector databases / indexes
-*.faiss
-*.index
+# ============================================================
 
-# Local model files
+# Local model weights
 *.gguf
 *.ggml
 *.safetensors
@@ -156,16 +157,24 @@ logs/
 *.pth
 *.bin
 
-# Generated embeddings / caches
+# Vector indexes / databases
+*.faiss
+*.index
 embeddings/
 vector_db/
 vectordb/
 chroma/
 chroma_db/
 
-# ==============================
+# AI temporary/cache output
+.ai_cache/
+ai_cache/
+
+# ============================================================
 # Generated YouTube Data
-# ==============================
+# ============================================================
+
+# Downloaded/generated media
 transcripts/
 downloads/
 audio/
@@ -175,37 +184,46 @@ thumbnails/
 generated/
 exports/
 
-# ==============================
-# Local caches
-# ==============================
-.cache/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+# ============================================================
+# Temporary / Backup Files
+# ============================================================
+*.tmp
+*.temp
+*.swp
+*.swo
+*.bak
+*.backup
+*.orig
 
-# ==============================
-# Secrets / Credentials
-# ==============================
-*.pem
-*.key
-*.crt
-credentials.json
-token.json
-service-account.json
-service_account.json
-
-# ==============================
+# ============================================================
 # Docker
-# ==============================
+# ============================================================
 docker-compose.override.yml
-
-# ==============================
-# Local Docker data
-# ==============================
 .docker/
 
-# ==============================
-# Temporary AI/API outputs
-# ==============================
-.ai_cache/
-ai_cache/
+# ============================================================
+# Local Development / Generated Data
+# ============================================================
+
+# Local application data
+data/
+tmp/
+temp/
+
+# Local caches
+.cache/
+cache/
+EOF
+
+# ============================================================
+# IMPORTANT
+# ============================================================
+# Do NOT add broad rules such as:
+#
+# videos/
+# notes/
+# knowledge/
+# folders/
+#
+# These are application source directories in this project and
+# must remain trackable by Git.
