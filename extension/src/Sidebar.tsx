@@ -44,42 +44,21 @@ import {
   type RAGAnswer,
   type RAGSource,
 } from "./ragApi";
-
-export type NoteBlockType =
-  | "paragraph"
-  | "heading"
-  | "equation"
-  | "timestamp"
-  | "image";
-
-export interface NoteBlock {
-  id: string;
-  type: NoteBlockType;
-  content: string;
-  metadata?: {
-    source?: "url" | "upload";
-    url?: string;
-    alt?: string;
-  };
-}
-
-export interface NoteDocument {
-  version: 1;
-  blocks: NoteBlock[];
-}
-
-export interface VideoNote {
-  id: number;
-  title: string;
-  content: string;
-  document?: NoteDocument;
-  note_type: string;
-  video?: number | null;
-  folder?: number | null;
-  timestamp_seconds?: number | null;
-  created_at?: string;
-  updated_at?: string;
-}
+import {
+  createEmptyDocument,
+  documentToPlainText,
+  normalizeDocument,
+  type NoteBlock,
+  type NoteBlockType,
+  type NoteDocument,
+  type VideoNote,
+} from "./noteDocument";
+export type {
+  NoteBlock,
+  NoteBlockType,
+  NoteDocument,
+  VideoNote,
+} from "./noteDocument";
 
 export interface VideoAnalysis {
   id: number;
@@ -137,7 +116,7 @@ interface Position {
   y: number;
 }
 
-interface ThemeColors {
+export interface ThemeColors {
   panel: string;
   header: string;
   surface: string;
@@ -192,63 +171,6 @@ const MINIMIZED_SIZE = 46;
 
 function createId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-}
-
-function createEmptyDocument(): NoteDocument {
-  return {
-    version: 1,
-    blocks: [
-      {
-        id: createId(),
-        type: "paragraph",
-        content: "",
-      },
-    ],
-  };
-}
-
-function normalizeDocument(note: VideoNote): NoteDocument {
-  if (
-    note.document &&
-    note.document.version === 1 &&
-    Array.isArray(note.document.blocks)
-  ) {
-    return note.document;
-  }
-
-  if (note.content?.trim()) {
-    return {
-      version: 1,
-      blocks: [
-        {
-          id: createId(),
-          type: "paragraph",
-          content: note.content,
-        },
-      ],
-    };
-  }
-
-  return createEmptyDocument();
-}
-
-function documentToPlainText(noteDocument: NoteDocument): string {
-  return noteDocument.blocks
-    .map((block) => {
-      if (block.type === "timestamp") {
-        return `[${block.content}]`;
-      }
-
-      if (block.type === "image") {
-        return block.metadata?.alt
-          ? `[Image: ${block.metadata.alt}]`
-          : "[Image]";
-      }
-
-      return block.content;
-    })
-    .filter(Boolean)
-    .join("\n\n");
 }
 
 function formatTimestamp(seconds: number): string {
@@ -915,9 +837,17 @@ interface BlockEditorProps {
   noteDocument: NoteDocument;
   colors: ThemeColors;
   onChange: (document: NoteDocument) => void;
+  enableTimestampJump?: boolean;
+  timestampContent?: () => string;
 }
 
-function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
+export function BlockEditor({
+  noteDocument,
+  colors,
+  onChange,
+  enableTimestampJump = true,
+  timestampContent = () => formatTimestamp(getCurrentVideoTime()),
+}: BlockEditorProps) {
   const [draggedBlockId, setDraggedBlockId] = useState<string | null>(null);
 
   const [dragOverBlockId, setDragOverBlockId] = useState<string | null>(null);
@@ -925,6 +855,8 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const imageInsertAfterRef = useRef<string | undefined>(undefined);
+
+  const replaceImageBlockIdRef = useRef<string | undefined>(undefined);
 
   function updateBlock(blockId: string, changes: Partial<NoteBlock>) {
     onChange({
@@ -945,16 +877,7 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
 
     onChange({
       ...noteDocument,
-      blocks:
-        blocks.length > 0
-          ? blocks
-          : [
-              {
-                id: createId(),
-                type: "paragraph",
-                content: "",
-              },
-            ],
+      blocks,
     });
   }
 
@@ -1124,8 +1047,9 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
     });
   }
 
-  function startImageUpload(afterId?: string) {
+  function startImageUpload(afterId?: string, replaceBlockId?: string) {
     imageInsertAfterRef.current = afterId;
+    replaceImageBlockIdRef.current = replaceBlockId;
 
     fileInputRef.current?.click();
   }
@@ -1151,14 +1075,29 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
         return;
       }
 
-      addImageBlock(
-        reader.result,
-        "upload",
-        imageInsertAfterRef.current,
-        file.name,
-      );
+      const replaceBlockId = replaceImageBlockIdRef.current;
+      if (replaceBlockId) {
+        updateBlock(replaceBlockId, {
+          content: reader.result,
+          metadata: {
+            ...noteDocument.blocks.find((block) => block.id === replaceBlockId)
+              ?.metadata,
+            source: "upload",
+            url: reader.result,
+            alt: file.name,
+          },
+        });
+      } else {
+        addImageBlock(
+          reader.result,
+          "upload",
+          imageInsertAfterRef.current,
+          file.name,
+        );
+      }
 
       imageInsertAfterRef.current = undefined;
+      replaceImageBlockIdRef.current = undefined;
     };
 
     reader.readAsDataURL(file);
@@ -1244,6 +1183,7 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
 
                 <select
                   value={block.type}
+                  aria-label={`Block type for block ${index + 1}`}
                   onChange={(event) =>
                     updateBlock(block.id, {
                       type: event.target.value as NoteBlockType,
@@ -1280,6 +1220,7 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
                   disabled={index === 0}
                   onClick={() => moveBlock(block.id, "up")}
                   title="Move block up"
+                  aria-label={`Move block ${index + 1} up`}
                   style={{
                     ...iconButtonStyle,
                     color: index === 0 ? colors.border : colors.muted,
@@ -1294,6 +1235,7 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
                   disabled={index === noteDocument.blocks.length - 1}
                   onClick={() => moveBlock(block.id, "down")}
                   title="Move block down"
+                  aria-label={`Move block ${index + 1} down`}
                   style={{
                     ...iconButtonStyle,
                     color:
@@ -1310,6 +1252,7 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
                   type="button"
                   onClick={() => removeBlock(block.id)}
                   title="Delete block"
+                  aria-label={`Delete block ${index + 1}`}
                   style={{
                     ...iconButtonStyle,
                     color: colors.muted,
@@ -1323,33 +1266,56 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
 
             {/* Block content */}
             {block.type === "timestamp" ? (
-              <button
-                type="button"
-                onClick={() => {
-                  const seconds = parseTimestamp(block.content);
-
-                  if (seconds !== null) {
-                    jumpToTimestamp(seconds);
-                  }
-                }}
+              <div
                 style={{
-                  width: "100%",
-                  textAlign: "left",
-                  padding: "12px 13px",
-                  borderRadius: 9,
-                  border: `1px solid ${colors.border}`,
-                  background: colors.accentSoft,
-                  color: colors.accent,
-                  cursor: "pointer",
-                  fontWeight: 700,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 7,
                 }}
               >
-                <Play size={13} aria-hidden="true" />
-                {block.content || "0:00"}
-              </button>
+                <input
+                  value={block.content}
+                  onChange={(event) =>
+                    updateBlock(block.id, { content: event.target.value })
+                  }
+                  aria-label={`Timestamp for block ${index + 1}`}
+                  placeholder="Timestamp (for example, 1:25)"
+                  style={{
+                    ...editorInputStyle,
+                    color: colors.primaryText,
+                    background: colors.input,
+                    borderColor: colors.border,
+                  }}
+                />
+                {enableTimestampJump && (
+                  <button
+                    type="button"
+                    disabled={parseTimestamp(block.content) === null}
+                    onClick={() => {
+                      const seconds = parseTimestamp(block.content);
+                      if (seconds !== null) jumpToTimestamp(seconds);
+                    }}
+                    aria-label={`Jump to timestamp ${block.content || "not set"}`}
+                    style={{
+                      alignSelf: "flex-start",
+                      padding: "7px 10px",
+                      borderRadius: 8,
+                      border: `1px solid ${colors.border}`,
+                      background: colors.accentSoft,
+                      color: colors.accent,
+                      cursor: "pointer",
+                      fontWeight: 700,
+                    }}
+                  >
+                    <Play size={13} aria-hidden="true" />
+                    Jump to timestamp
+                  </button>
+                )}
+              </div>
             ) : block.type === "heading" ? (
               <input
                 value={block.content}
+                aria-label={`Heading text for block ${index + 1}`}
                 onChange={(event) =>
                   updateBlock(block.id, {
                     content: event.target.value,
@@ -1386,8 +1352,34 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
                   }}
                 />
 
+                {block.metadata?.source !== "upload" && (
+                  <input
+                    value={block.content}
+                    onChange={(event) =>
+                      updateBlock(block.id, {
+                        content: event.target.value,
+                        metadata: {
+                          ...block.metadata,
+                          source: "url",
+                          url: event.target.value,
+                        },
+                      })
+                    }
+                    aria-label={`Image URL for block ${index + 1}`}
+                    placeholder="Image URL"
+                    style={{
+                      ...editorInputStyle,
+                      color: colors.primaryText,
+                      background: colors.input,
+                      borderColor: colors.border,
+                      fontSize: 11,
+                    }}
+                  />
+                )}
+
                 <input
                   value={block.metadata?.alt || ""}
+                  aria-label={`Image description for block ${index + 1}`}
                   onChange={(event) =>
                     updateBlock(block.id, {
                       metadata: {
@@ -1405,10 +1397,25 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
                     fontSize: 11,
                   }}
                 />
+                {block.metadata?.source === "upload" && (
+                  <button
+                    type="button"
+                    onClick={() => startImageUpload(undefined, block.id)}
+                    aria-label={`Replace image in block ${index + 1}`}
+                    style={{
+                      ...smallToolButton,
+                      color: colors.muted,
+                      borderColor: colors.border,
+                    }}
+                  >
+                    Replace uploaded image
+                  </button>
+                )}
               </div>
             ) : (
               <textarea
                 value={block.content}
+                aria-label={`${block.type === "equation" ? "Equation" : "Paragraph"} content for block ${index + 1}`}
                 onChange={(event) =>
                   updateBlock(block.id, {
                     content: event.target.value,
@@ -1482,11 +1489,7 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
               <button
                 type="button"
                 onClick={() =>
-                  addBlock(
-                    "timestamp",
-                    block.id,
-                    formatTimestamp(getCurrentVideoTime()),
-                  )
+                  addBlock("timestamp", block.id, timestampContent())
                 }
                 style={{
                   ...smallToolButton,
@@ -1555,9 +1558,18 @@ function BlockEditor({ noteDocument, colors, onChange }: BlockEditorProps) {
 interface NoteReaderProps {
   note: VideoNote;
   colors: ThemeColors;
+  showTitle?: boolean;
+  enableTimestampJump?: boolean;
+  onTimestampClick?: (seconds: number) => void;
 }
 
-function NoteReader({ note, colors }: NoteReaderProps) {
+export function NoteReader({
+  note,
+  colors,
+  showTitle = true,
+  enableTimestampJump = true,
+  onTimestampClick,
+}: NoteReaderProps) {
   const noteDocument = normalizeDocument(note);
 
   return (
@@ -1568,16 +1580,18 @@ function NoteReader({ note, colors }: NoteReaderProps) {
         minHeight: "100%",
       }}
     >
-      <h1
-        style={{
-          margin: "0 0 18px",
-          fontSize: 23,
-          lineHeight: 1.25,
-          color: colors.primaryText,
-        }}
-      >
-        {note.title}
-      </h1>
+      {showTitle && (
+        <h1
+          style={{
+            margin: "0 0 18px",
+            fontSize: 23,
+            lineHeight: 1.25,
+            color: colors.primaryText,
+          }}
+        >
+          {note.title}
+        </h1>
+      )}
 
       <div
         style={{
@@ -1631,9 +1645,15 @@ function NoteReader({ note, colors }: NoteReaderProps) {
               <button
                 key={block.id}
                 type="button"
-                disabled={seconds === null}
+                disabled={
+                  seconds === null ||
+                  (!enableTimestampJump && !onTimestampClick)
+                }
                 onClick={() => {
-                  if (seconds !== null) {
+                  if (seconds === null) return;
+                  if (onTimestampClick) {
+                    onTimestampClick(seconds);
+                  } else if (enableTimestampJump) {
                     jumpToTimestamp(seconds);
                   }
                 }}
@@ -1644,7 +1664,11 @@ function NoteReader({ note, colors }: NoteReaderProps) {
                   padding: "7px 10px",
                   background: colors.accentSoft,
                   color: colors.accent,
-                  cursor: seconds !== null ? "pointer" : "default",
+                  cursor:
+                    seconds !== null &&
+                    (enableTimestampJump || onTimestampClick)
+                      ? "pointer"
+                      : "default",
                   fontWeight: 700,
                 }}
               >

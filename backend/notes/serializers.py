@@ -1,9 +1,30 @@
 from rest_framework import serializers
 
 from .models import Note
+from videos.models import Video
+
+
+class NoteVideoMetadataSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Video
+        fields = [
+            "id",
+            "youtube_id",
+            "title",
+            "channel_name",
+            "channel_handle",
+            "thumbnail_url",
+        ]
+        read_only_fields = fields
 
 
 class NoteSerializer(serializers.ModelSerializer):
+    video_detail = NoteVideoMetadataSerializer(
+        source="video",
+        read_only=True,
+        allow_null=True,
+    )
+
     class Meta:
         model = Note
         fields = [
@@ -14,6 +35,7 @@ class NoteSerializer(serializers.ModelSerializer):
             "note_type",
             "folder",
             "video",
+            "video_detail",
             "timestamp_seconds",
             "created_at",
             "updated_at",

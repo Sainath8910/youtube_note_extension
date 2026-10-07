@@ -137,4 +137,38 @@ class VideoNoteCreateTests(TestCase):
         self.assertEqual(video.duration_seconds, 120)
         self.assertEqual(Note.objects.filter(video=video).count(), 1)
 
+    def test_notes_include_resolved_video_metadata(self):
+        video = Video.objects.create(
+            youtube_id=self.youtube_id,
+            title="Video title",
+            channel_name="Channel name",
+            channel_handle="@channel",
+            thumbnail_url="https://example.com/thumbnail.jpg",
+        )
+        note = Note.objects.create(
+            user=self.user,
+            title="Video note",
+            content="Note content",
+            note_type=Note.NoteType.VIDEO,
+            video=video,
+            timestamp_seconds=92,
+        )
+
+        response = self.client.get("/api/notes/")
+
+        self.assertEqual(response.status_code, 200)
+        returned_note = next(item for item in response.data if item["id"] == note.id)
+        self.assertEqual(returned_note["video"], video.id)
+        self.assertEqual(
+            returned_note["video_detail"],
+            {
+                "id": video.id,
+                "youtube_id": self.youtube_id,
+                "title": "Video title",
+                "channel_name": "Channel name",
+                "channel_handle": "@channel",
+                "thumbnail_url": "https://example.com/thumbnail.jpg",
+            },
+        )
+
 # Create your tests here.

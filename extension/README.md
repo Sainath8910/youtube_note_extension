@@ -1,75 +1,51 @@
-# React + TypeScript + Vite
+# YouTube Knowledge Extension
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+The extension combines a dashboard workspace with a React sidebar injected into
+YouTube watch pages. The sidebar remains the place to capture video-linked
+notes, inspect video analysis, and ask grounded questions.
 
-Currently, two official plugins are available:
+## Dashboard
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Click the extension toolbar button to open the dashboard at `index.html#/dashboard`.
+If the dashboard is already open, the extension focuses that tab and returns it
+to the Dashboard route instead of opening a duplicate. The
+responsive sidebar links use hash routes so each workspace section can also be
+opened directly:
 
-## React Compiler
+- `#/dashboard` — overview, note statistics, recent notes and videos, and quick
+  actions.
+- `#/notes` — notes returned by the existing authenticated `GET /api/notes/`
+  endpoint.
+- `#/videos`, `#/folders`, `#/search`, and `#/knowledge` — navigation
+  placeholders that explain which existing workflows or backend surfaces are
+  available.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Video and folder collection APIs, dashboard search, and an account/profile
+screen are not currently implemented. The dashboard does not add login or
+logout behavior. Its note request uses the extension background service and
+the same backend authentication convention as the existing sidebar. The
+manifest's `tabs` permission is used to locate and focus the dashboard tab.
 
-## Expanding the ESLint configuration
+Dashboard totals, notes created in the last seven days, video-associated note
+counts, and recent-note ordering are derived from one complete, unpaginated
+notes response. Recent notes are ordered by `updated_at` (falling back to
+`created_at`) and display the available title, text, date, and note timestamp.
+The current note response exposes only the related video's database ID, not
+its YouTube ID, so timestamp badges are shown without constructing video links.
+Dashboard refresh requests the note list again through the background service.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Development
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+From this directory:
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```powershell
+npm install
+npm run dev
+npm run build
+npm run lint
 ```
 
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
-```
+The Vite development page previews the dashboard shell. Loading personal notes
+requires the page to be opened in the browser extension so it can communicate
+with the extension background service. The build emits the dashboard page,
+YouTube content script, and background service worker into `dist/`.

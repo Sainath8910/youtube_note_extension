@@ -60,6 +60,9 @@ class NoteDetailView(generics.RetrieveUpdateDestroyAPIView):
     def get_queryset(self):
         return Note.objects.filter(
             user=self.request.user
+        ).select_related(
+            "video",
+            "folder",
         )
 
     def perform_update(self, serializer):

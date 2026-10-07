@@ -4,10 +4,11 @@
   "version": "0.1.0",
   "description": "A personal knowledge layer for YouTube.",
   "action": {
-    "default_title": "YouTube Knowledge"
+    "default_title": "Open YouTube Knowledge dashboard"
   },
   "permissions": [
-    "storage"
+    "storage",
+    "tabs"
   ],
   "host_permissions": [
     "http://localhost:8000/*",
