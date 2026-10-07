@@ -48,12 +48,21 @@ import {
   type DashboardNote,
 } from "./dashboardApi";
 import {
-  isRAGAnswer,
-  sendAskRAG,
   type AskRAGScope,
-  type RAGAnswer,
-  type RAGSource,
 } from "./ragApi";
+import {
+  askConversation,
+  ConversationApiError,
+  createConversation,
+  deleteConversation,
+  getConversation,
+  listConversations,
+  renameConversation,
+  type Conversation,
+  type ConversationDetail,
+  type ConversationScope,
+  type ConversationSource,
+} from "./conversationApi";
 import "./dashboard.css";
 
 type DashboardRoute =
@@ -1769,26 +1778,7 @@ function getDashboardVideoContexts(
   return [...contexts.values()];
 }
 
-function getKnowledgeErrorMessage(status: number): string {
-  if (status === 400) {
-    return "Check your question and video context, then try again.";
-  }
-  if (status === 401 || status === 403) {
-    return "Your session is not authorized. Sign in again and retry.";
-  }
-  if (status === 404) {
-    return "That video context is unavailable to your account.";
-  }
-  if (status === 502) {
-    return "The AI service could not generate an answer. Please try again.";
-  }
-  if (status === 0) {
-    return "Could not reach the Knowledge service. Check your connection and retry.";
-  }
-  return "The Knowledge service is temporarily unavailable. Please try again.";
-}
-
-function sourceTypeLabel(source: RAGSource): string {
+function sourceTypeLabel(source: ConversationSource): string {
   const sourceType = source.metadata.source_type;
   if (sourceType === "NOTE") return "Note";
   if (sourceType === "VIDEO_TRANSCRIPT") return "Video transcript";
@@ -1796,7 +1786,7 @@ function sourceTypeLabel(source: RAGSource): string {
   return source.video_id === null ? "Personal knowledge" : "Video knowledge";
 }
 
-function metadataTimestamp(source: RAGSource): number | null {
+function metadataTimestamp(source: ConversationSource): number | null {
   if (source.metadata.source_type !== "VIDEO_TRANSCRIPT") return null;
   const seconds = source.metadata.start_seconds;
   return typeof seconds === "number" &&
@@ -1804,6 +1794,41 @@ function metadataTimestamp(source: RAGSource): number | null {
     seconds >= 0
     ? Math.floor(seconds)
     : null;
+}
+
+function conversationScopeLabel(scope: ConversationScope): string {
+  if (scope === "CURRENT_VIDEO") return "Current video";
+  if (scope === "COMBINED") return "Video + My Knowledge";
+  return "My Knowledge";
+}
+
+function conversationErrorMessage(error: unknown): string {
+  if (error instanceof ConversationApiError) {
+    if (error.status === 401 || error.status === 403) {
+      return "Your session is not authorized. Sign in again and retry.";
+    }
+    if (error.status === 404) {
+      return "This conversation or video context is no longer available.";
+    }
+    return error.message;
+  }
+  return error instanceof Error
+    ? error.message
+    : "The Conversations service could not complete the request.";
+}
+
+function conversationUpdatedLabel(value: string): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "Recently updated";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+  }).format(timestamp);
+}
+
+function truncateConversationTitle(value: string): string {
+  const title = value.trim();
+  return title.length > 120 ? `${title.slice(0, 117)}...` : title;
 }
 
 function DashboardKnowledgeWorkspace({
@@ -1816,67 +1841,223 @@ function DashboardKnowledgeWorkspace({
     dashboardState.status === "ready" ? dashboardState.data.notes : [];
   const [scope, setScope] = useState<AskRAGScope>("PERSONAL_KB");
   const [youtubeId, setYoutubeId] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<number | null>(
+    null,
+  );
+  const [activeConversation, setActiveConversation] =
+    useState<ConversationDetail | null>(null);
+  const [isConversationListLoading, setIsConversationListLoading] =
+    useState(true);
+  const [isConversationLoading, setIsConversationLoading] = useState(false);
+  const [isAsking, setIsAsking] = useState(false);
+  const [deletingConversationId, setDeletingConversationId] = useState<
+    number | null
+  >(null);
   const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState<RAGAnswer | null>(null);
-  const [answeredScope, setAnsweredScope] = useState<AskRAGScope | null>(null);
-  const [answeredYoutubeId, setAnsweredYoutubeId] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+  const conversationRequestVersion = useRef(0);
   const normalizedYoutubeId = (youtubeId ?? videos[0]?.youtubeId ?? "").trim();
   const validVideoContext = YOUTUBE_ID_PATTERN.test(normalizedYoutubeId);
+  const currentConversationScope = activeConversation?.scope ?? scope;
   const canAsk =
     question.trim().length > 0 &&
-    (scope === "PERSONAL_KB" || validVideoContext) &&
-    !isLoading;
+    (activeConversation !== null ||
+      scope === "PERSONAL_KB" ||
+      validVideoContext) &&
+    !isAsking &&
+    !isConversationLoading;
 
-  function clearResult() {
-    setAnswer(null);
-    setAnsweredScope(null);
-    setAnsweredYoutubeId("");
+  useEffect(() => {
+    let active = true;
+    listConversations()
+      .then((items) => {
+        if (!active) return;
+        setConversations(items);
+        setListError(null);
+      })
+      .catch((loadError: unknown) => {
+        if (!active) return;
+        setListError(conversationErrorMessage(loadError));
+      })
+      .finally(() => {
+        if (active) setIsConversationListLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function refreshConversations() {
+    try {
+      const items = await listConversations();
+      setConversations(items);
+      setListError(null);
+    } catch (loadError) {
+      setListError(conversationErrorMessage(loadError));
+    }
+  }
+
+  function startNewConversation() {
+    conversationRequestVersion.current += 1;
+    setActiveConversationId(null);
+    setActiveConversation(null);
+    setQuestion("");
     setError(null);
+    setScope("PERSONAL_KB");
+    setYoutubeId(null);
+  }
+
+  async function openConversation(conversationId: number) {
+    const requestVersion = ++conversationRequestVersion.current;
+    setActiveConversationId(conversationId);
+    setActiveConversation(null);
+    setQuestion("");
+    setError(null);
+    setIsConversationLoading(true);
+    try {
+      const conversation = await getConversation(conversationId);
+      if (requestVersion !== conversationRequestVersion.current) return;
+      setActiveConversation(conversation);
+      setScope(conversation.scope);
+      setYoutubeId(conversation.youtube_id);
+    } catch (loadError) {
+      if (requestVersion === conversationRequestVersion.current) {
+        setError(conversationErrorMessage(loadError));
+      }
+    } finally {
+      if (requestVersion === conversationRequestVersion.current) {
+        setIsConversationLoading(false);
+      }
+    }
   }
 
   async function handleAsk(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canAsk) return;
 
-    const submittedScope = scope;
-    const submittedYoutubeId =
-      submittedScope === "PERSONAL_KB" ? "" : normalizedYoutubeId;
-    setIsLoading(true);
-    clearResult();
-
+    const submittedQuestion = question.trim();
+    setError(null);
+    setIsAsking(true);
+    let conversationId = activeConversation?.id ?? null;
     try {
-      const response = await sendAskRAG(
-        question.trim(),
-        submittedScope,
-        submittedYoutubeId,
-      );
-      if (!response.success) {
-        setError(getKnowledgeErrorMessage(response.status));
-        return;
-      }
-      if (!isRAGAnswer(response.data)) {
-        setError("The Knowledge service returned an unexpected response.");
-        return;
+      if (conversationId === null) {
+        const created = await createConversation({
+          title: truncateConversationTitle(submittedQuestion),
+          scope,
+          youtube_id: scope === "PERSONAL_KB" ? null : normalizedYoutubeId,
+        });
+        conversationId = created.id;
+        setActiveConversationId(created.id);
+        setActiveConversation({ ...created, messages: [] });
+        setConversations((current) => [
+          created,
+          ...current.filter((item) => item.id !== created.id),
+        ]);
       }
 
-      setAnswer(response.data);
-      setAnsweredScope(submittedScope);
-      setAnsweredYoutubeId(submittedYoutubeId);
-    } catch {
-      setError(
-        "Could not reach the Knowledge service. Check your connection and retry.",
-      );
+      const turn = await askConversation(conversationId, submittedQuestion);
+      setActiveConversation((current) => {
+        if (!current || current.id !== conversationId) return current;
+        return {
+          ...turn.conversation,
+          messages: [
+            ...current.messages,
+            turn.user_message,
+            turn.assistant_message,
+          ],
+        };
+      });
+      setConversations((current) => [
+        turn.conversation,
+        ...current.filter((item) => item.id !== turn.conversation.id),
+      ]);
+      setQuestion("");
+      void refreshConversations();
+    } catch (askError) {
+      setError(conversationErrorMessage(askError));
+      if (conversationId !== null) {
+        void getConversation(conversationId)
+          .then((conversation) => {
+            setActiveConversation((current) =>
+              current?.id === conversation.id ? conversation : current,
+            );
+          })
+          .catch((refreshError: unknown) => {
+            console.error(
+              "[YouTube Knowledge] Could not refresh the conversation after an ask failure:",
+              refreshError,
+            );
+          });
+      }
     } finally {
-      setIsLoading(false);
+      setIsAsking(false);
     }
   }
 
-  function sourceVideo(source: RAGSource): DashboardVideoContext | null {
+  async function handleDeleteConversation(conversation: Conversation) {
+    if (
+      !window.confirm(`Delete "${conversation.title}" and its messages?`)
+    ) {
+      return;
+    }
+    const previousConversations = conversations;
+    const previousActiveConversation = activeConversation;
+    setDeletingConversationId(conversation.id);
+    setConversations((current) =>
+      current.filter((item) => item.id !== conversation.id),
+    );
+    if (activeConversationId === conversation.id) {
+      setActiveConversationId(null);
+      setActiveConversation(null);
+      setQuestion("");
+    }
+    setError(null);
+    try {
+      await deleteConversation(conversation.id);
+    } catch (deleteError) {
+      setError(conversationErrorMessage(deleteError));
+      setConversations(previousConversations);
+      if (previousActiveConversation?.id === conversation.id) {
+        setActiveConversationId(conversation.id);
+        setActiveConversation(previousActiveConversation);
+      }
+    } finally {
+      setDeletingConversationId(null);
+    }
+  }
+
+  async function handleRenameConversation(conversation: Conversation) {
+    const proposedTitle = window.prompt(
+      "Conversation title",
+      conversation.title,
+    );
+    if (proposedTitle === null || !proposedTitle.trim()) return;
+    try {
+      const renamed = await renameConversation(
+        conversation.id,
+        truncateConversationTitle(proposedTitle),
+      );
+      setConversations((current) =>
+        current.map((item) => (item.id === renamed.id ? renamed : item)),
+      );
+      setActiveConversation((current) =>
+        current?.id === renamed.id ? { ...current, ...renamed } : current,
+      );
+    } catch (renameError) {
+      setError(conversationErrorMessage(renameError));
+    }
+  }
+
+  function sourceVideo(
+    source: ConversationSource,
+    sourceScope: ConversationScope,
+    sourceYoutubeId: string | null,
+  ): DashboardVideoContext | null {
     const note = notes.find((item) => item.id === source.note_id);
     const noteVideo = note?.video_detail;
-    const noteVideoId = noteVideo?.youtube_id;
+    const noteVideoId = source.youtube_id ?? noteVideo?.youtube_id;
     if (noteVideoId && YOUTUBE_ID_PATTERN.test(noteVideoId)) {
       return videos.find((video) => video.youtubeId === noteVideoId) ?? {
         youtubeId: noteVideoId,
@@ -1897,12 +2078,13 @@ function DashboardKnowledgeWorkspace({
     if (matchedVideo) return matchedVideo;
 
     if (
-      answeredScope === "CURRENT_VIDEO" &&
+      sourceScope === "CURRENT_VIDEO" &&
       source.video_id !== null &&
-      YOUTUBE_ID_PATTERN.test(answeredYoutubeId)
+      sourceYoutubeId !== null &&
+      YOUTUBE_ID_PATTERN.test(sourceYoutubeId)
     ) {
       return {
-        youtubeId: answeredYoutubeId,
+        youtubeId: sourceYoutubeId,
         databaseId: source.video_id,
         title: "Selected video",
         channelName: "",
@@ -1914,90 +2096,211 @@ function DashboardKnowledgeWorkspace({
 
   return (
     <section className="knowledge-workspace" aria-labelledby="knowledge-heading">
-      <div className="content-card knowledge-question-card">
-        <div className="knowledge-card-heading">
-          <span className="knowledge-icon">
-            <Brain size={19} aria-hidden="true" />
-          </span>
-          <div>
-            <h2 id="knowledge-heading">Ask your knowledge</h2>
-            <p>
-              Answers are grounded in the notes and video knowledge available
-              in the selected context.
-            </p>
-          </div>
-        </div>
-
-        <form className="knowledge-form" onSubmit={(event) => void handleAsk(event)}>
-          <label className="knowledge-field">
-            <span>Knowledge context</span>
-            <select
-              value={scope}
-              disabled={isLoading}
-              onChange={(event) => {
-                const nextScope = event.target.value;
-                if (
-                  nextScope === "CURRENT_VIDEO" ||
-                  nextScope === "PERSONAL_KB" ||
-                  nextScope === "COMBINED"
-                ) {
-                  setScope(nextScope);
-                  clearResult();
-                }
-              }}
+      <div className="knowledge-conversation-layout">
+        <aside
+          className="content-card knowledge-conversation-sidebar"
+          aria-label="AI conversations"
+        >
+          <div className="knowledge-conversation-list-heading">
+            <h2>Conversations</h2>
+            <button
+              className="knowledge-new-conversation"
+              type="button"
+              onClick={startNewConversation}
             >
-              <option value="CURRENT_VIDEO">Current Video</option>
-              <option value="PERSONAL_KB">My Knowledge</option>
-              <option value="COMBINED">Video + My Knowledge</option>
-            </select>
-          </label>
+              <Plus size={15} aria-hidden="true" />
+              New conversation
+            </button>
+          </div>
+          {listError && (
+            <div className="knowledge-error" role="alert">
+              <AlertCircle size={15} aria-hidden="true" />
+              <span>{listError}</span>
+              <button
+                className="knowledge-list-retry"
+                type="button"
+                onClick={() => void refreshConversations()}
+              >
+                Retry
+              </button>
+            </div>
+          )}
+          {isConversationListLoading ? (
+            <p className="knowledge-conversation-list-status" role="status">
+              Loading conversations...
+            </p>
+          ) : conversations.length === 0 ? (
+            <p className="knowledge-conversation-list-status">
+              Your saved conversations will appear here.
+            </p>
+          ) : (
+            <ul className="knowledge-conversation-list">
+              {conversations.map((conversation) => {
+                const video = videos.find(
+                  (item) => item.youtubeId === conversation.youtube_id,
+                );
+                return (
+                  <li key={conversation.id}>
+                    <button
+                      className={`knowledge-conversation-item${
+                        activeConversationId === conversation.id
+                          ? " is-active"
+                          : ""
+                      }`}
+                      type="button"
+                      aria-current={
+                        activeConversationId === conversation.id
+                          ? "page"
+                          : undefined
+                      }
+                      onClick={() => void openConversation(conversation.id)}
+                    >
+                      <strong>{conversation.title}</strong>
+                      <span>
+                        {conversationScopeLabel(conversation.scope)}
+                        {conversation.youtube_id
+                          ? ` · ${video?.title || conversation.youtube_id}`
+                          : ""}
+                      </span>
+                      <time dateTime={conversation.updated_at}>
+                        {conversationUpdatedLabel(conversation.updated_at)}
+                      </time>
+                    </button>
+                    <div className="knowledge-conversation-actions">
+                      <button
+                        type="button"
+                        aria-label={`Rename ${conversation.title}`}
+                        onClick={() => void handleRenameConversation(conversation)}
+                      >
+                        Rename
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Delete ${conversation.title}`}
+                        disabled={deletingConversationId === conversation.id}
+                        onClick={() =>
+                          void handleDeleteConversation(conversation)
+                        }
+                      >
+                        {deletingConversationId === conversation.id
+                          ? "Deleting..."
+                          : "Delete"}
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </aside>
 
-          {scope !== "PERSONAL_KB" && (
-            <div className="knowledge-video-context">
-              <label className="knowledge-field" htmlFor="knowledge-video-id">
-                <span>YouTube video ID</span>
-                <input
-                  id="knowledge-video-id"
-                  type="text"
-                  list="dashboard-knowledge-videos"
-                  value={youtubeId ?? videos[0]?.youtubeId ?? ""}
-                  placeholder="Enter an 11-character YouTube ID"
-                  autoComplete="off"
-                  disabled={isLoading}
-                  aria-invalid={normalizedYoutubeId.length > 0 && !validVideoContext}
-                  aria-describedby="knowledge-video-help"
-                  onChange={(event) => {
-                    setYoutubeId(event.target.value);
-                    clearResult();
-                  }}
-                />
-                <datalist id="dashboard-knowledge-videos">
-                  {videos.map((video) => (
-                    <option
-                      key={video.youtubeId}
-                      value={video.youtubeId}
-                      label={video.title}
-                    />
-                  ))}
-                </datalist>
-                <span id="knowledge-video-help" className="knowledge-field-help">
-                  {validVideoContext
-                    ? "Use a saved video suggestion or enter another valid YouTube ID."
-                    : "Choose a saved video suggestion or enter a valid 11-character ID."}
-                </span>
-              </label>
+        <div className="knowledge-conversation-main">
+          <div className="content-card knowledge-question-card">
+            <div className="knowledge-card-heading">
+              <span className="knowledge-icon">
+                <Brain size={19} aria-hidden="true" />
+              </span>
+              <div>
+                <h2 id="knowledge-heading">
+                  {activeConversation
+                    ? activeConversation.title
+                    : "Start a new AI conversation"}
+                </h2>
+                <p>
+                  {activeConversation
+                    ? conversationScopeLabel(activeConversation.scope)
+                    : "Choose your knowledge context, then ask a question."}
+                </p>
+              </div>
+              {activeConversation && (
+                <button
+                  className="knowledge-rename-active"
+                  type="button"
+                  onClick={() => void handleRenameConversation(activeConversation)}
+                >
+                  Rename
+                </button>
+              )}
+            </div>
 
-              {validVideoContext && (
-                <div className="knowledge-video-preview">
-                  {(() => {
-                    const selectedVideo = videos.find(
-                      (video) => video.youtubeId === normalizedYoutubeId,
-                    );
-                    return (
-                      <>
-                        {selectedVideo?.thumbnailUrl ? (
+            {!activeConversation && !isConversationLoading && (
+              <div className="knowledge-form knowledge-start-form">
+                <label className="knowledge-field">
+                  <span>Knowledge context</span>
+                  <select
+                    value={scope}
+                    disabled={isAsking}
+                    onChange={(event) => {
+                      const nextScope = event.target.value;
+                      if (
+                        nextScope === "CURRENT_VIDEO" ||
+                        nextScope === "PERSONAL_KB" ||
+                        nextScope === "COMBINED"
+                      ) {
+                        setScope(nextScope);
+                        setError(null);
+                      }
+                    }}
+                  >
+                    <option value="CURRENT_VIDEO">Current Video</option>
+                    <option value="PERSONAL_KB">My Knowledge</option>
+                    <option value="COMBINED">Video + My Knowledge</option>
+                  </select>
+                </label>
+                {scope !== "PERSONAL_KB" && (
+                  <div className="knowledge-video-context">
+                    <label
+                      className="knowledge-field"
+                      htmlFor="knowledge-video-id"
+                    >
+                      <span>YouTube video ID</span>
+                      <input
+                        id="knowledge-video-id"
+                        type="text"
+                        list="dashboard-knowledge-videos"
+                        value={youtubeId ?? videos[0]?.youtubeId ?? ""}
+                        placeholder="Enter an 11-character YouTube ID"
+                        autoComplete="off"
+                        disabled={isAsking}
+                        aria-invalid={
+                          normalizedYoutubeId.length > 0 && !validVideoContext
+                        }
+                        aria-describedby="knowledge-video-help"
+                        onChange={(event) => {
+                          setYoutubeId(event.target.value);
+                          setError(null);
+                        }}
+                      />
+                      <datalist id="dashboard-knowledge-videos">
+                        {videos.map((video) => (
+                          <option
+                            key={video.youtubeId}
+                            value={video.youtubeId}
+                            label={video.title}
+                          />
+                        ))}
+                      </datalist>
+                      <span
+                        id="knowledge-video-help"
+                        className="knowledge-field-help"
+                      >
+                        {validVideoContext
+                          ? "Use a saved video suggestion or enter another valid YouTube ID."
+                          : "Choose a saved video suggestion or enter a valid 11-character ID."}
+                      </span>
+                    </label>
+                    {validVideoContext && (
+                      <div className="knowledge-video-preview">
+                        {videos.find(
+                          (video) => video.youtubeId === normalizedYoutubeId,
+                        )?.thumbnailUrl ? (
                           <img
-                            src={selectedVideo.thumbnailUrl}
+                            src={
+                              videos.find(
+                                (video) =>
+                                  video.youtubeId === normalizedYoutubeId,
+                              )?.thumbnailUrl ?? undefined
+                            }
                             alt=""
                             loading="lazy"
                           />
@@ -2008,199 +2311,238 @@ function DashboardKnowledgeWorkspace({
                         )}
                         <div>
                           <strong>
-                            {selectedVideo?.title || "Selected YouTube video"}
+                            {videos.find(
+                              (video) =>
+                                video.youtubeId === normalizedYoutubeId,
+                            )?.title || "Selected YouTube video"}
                           </strong>
-                          {selectedVideo?.channelName && (
-                            <span>{selectedVideo.channelName}</span>
-                          )}
                           <code>{normalizedYoutubeId}</code>
                         </div>
-                      </>
-                    );
-                  })()}
-                </div>
-              )}
-            </div>
-          )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
-          <label className="knowledge-field" htmlFor="knowledge-question">
-            <span>Your question</span>
-            <textarea
-              id="knowledge-question"
-              value={question}
-              rows={5}
-              placeholder="Ask a question about your notes or video knowledge..."
-              disabled={isLoading}
-              onChange={(event) => {
-                setQuestion(event.target.value);
-                setError(null);
-              }}
-            />
-          </label>
-
-          {error && (
-            <div className="knowledge-error" role="alert">
-              <AlertCircle size={17} aria-hidden="true" />
-              <span>{error}</span>
-            </div>
-          )}
-
-          <div className="knowledge-form-footer">
-            <span>
-              {scope === "PERSONAL_KB"
-                ? "Searching your personal knowledge"
-                : scope === "CURRENT_VIDEO"
-                  ? "Searching knowledge for the selected video"
-                  : "Searching the video and your personal knowledge"}
-            </span>
-            <button
-              className="knowledge-ask-button"
-              type="submit"
-              disabled={!canAsk}
-            >
-              {isLoading ? (
-                <>
-                  <RefreshCw className="is-spinning" size={16} aria-hidden="true" />
-                  Generating...
-                </>
-              ) : error ? (
-                <>
-                  <RefreshCw size={16} aria-hidden="true" />
-                  Try again
-                </>
-              ) : (
-                <>
-                  <Sparkles size={16} aria-hidden="true" />
-                  Ask AI
-                </>
-              )}
-            </button>
-          </div>
-        </form>
-      </div>
-
-      <section
-        className="content-card knowledge-answer-card"
-        aria-labelledby="knowledge-answer-heading"
-        aria-busy={isLoading}
-      >
-        <div className="card-heading">
-          <div>
-            <div className="card-title-row">
-              <span className="section-icon">
-                <Sparkles size={16} aria-hidden="true" />
-              </span>
-              <h2 id="knowledge-answer-heading">Answer</h2>
-            </div>
-            <p>
-              {answeredScope === null
-                ? "Your answer will appear here."
-                : answeredScope === "CURRENT_VIDEO"
-                  ? "Grounded in the selected video."
-                  : answeredScope === "PERSONAL_KB"
-                    ? "Grounded in your personal knowledge."
-                    : "Grounded in the selected video and your knowledge."}
-            </p>
-          </div>
-        </div>
-
-        {isLoading ? (
-          <div className="knowledge-answer-loading" role="status">
-            <span />
-            <span />
-            <span />
-            <p>Searching sources and preparing an answer...</p>
-          </div>
-        ) : answer ? (
-          <>
-            <p className="knowledge-answer-text">{answer.answer}</p>
-            <div className="knowledge-sources">
-              <div className="knowledge-sources-heading">
-                <h3>Sources</h3>
+            {activeConversation && (
+              <div className="knowledge-active-context">
+                <Sparkles size={14} aria-hidden="true" />
                 <span>
-                  {answer.sources.length}{" "}
-                  {answer.sources.length === 1 ? "source" : "sources"}
+                  {conversationScopeLabel(activeConversation.scope)}
+                  {activeConversation.youtube_id
+                    ? ` · ${activeConversation.youtube_id}`
+                    : ""}
                 </span>
               </div>
-              {answer.sources.length === 0 ? (
-                <p className="knowledge-no-sources">
-                  No matching sources were found for this question and context.
-                  Try another question or choose a different context.
-                </p>
-              ) : (
-                <div className="knowledge-source-list">
-                  {answer.sources.map((source, index) => {
-                    const note = notes.find(
-                      (item) => item.id === source.note_id,
-                    );
-                    const video = sourceVideo(source);
-                    const timestamp = metadataTimestamp(source);
-                    const timestampUrl =
-                      timestamp === null
-                        ? null
-                        : getYoutubeWatchUrl(video?.youtubeId, timestamp);
-                    const section =
-                      typeof source.metadata.section === "string"
-                        ? source.metadata.section.replaceAll("_", " ")
-                        : null;
+            )}
 
-                    return (
-                      <article
-                        className="knowledge-source"
-                        key={`${source.chunk_id}-${index}`}
-                      >
-                        <div className="knowledge-source-heading">
-                          <div>
-                            <span className="knowledge-source-type">
-                              {sourceTypeLabel(source)}
-                            </span>
-                            {(note?.title || video?.title || section) && (
-                              <strong>
-                                {note?.title ||
-                                  (video?.title !== "Selected video"
-                                    ? video?.title
-                                    : null) ||
-                                  section ||
-                                  "Video"}
-                              </strong>
-                            )}
-                          </div>
-                          {timestampUrl && timestamp !== null && (
-                            <a
-                              className="knowledge-timestamp-link"
-                              href={timestampUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              <Clock3 size={13} aria-hidden="true" />
-                              Open at {formatTimestamp(timestamp)}
-                              <ExternalLink size={12} aria-hidden="true" />
-                            </a>
-                          )}
-                        </div>
-                        <p className="knowledge-source-excerpt">
-                          {source.content}
+            {error && (
+              <div className="knowledge-error" role="alert">
+                <AlertCircle size={17} aria-hidden="true" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            {activeConversationId !== null &&
+              (isConversationLoading || !activeConversation) && (
+                <div className="knowledge-answer-loading" role="status">
+                  <span />
+                  <span />
+                  <p>Loading conversation...</p>
+                </div>
+              )}
+
+            <div className="knowledge-thread" aria-live="polite">
+              {activeConversation?.messages.map((message) => (
+                <article
+                  className={`knowledge-message is-${message.role.toLowerCase()}`}
+                  key={message.id}
+                >
+                  <div className="knowledge-message-heading">
+                    <strong>
+                      {message.role === "USER" ? "You" : "AI"}
+                    </strong>
+                    <time dateTime={message.created_at}>
+                      {conversationUpdatedLabel(message.created_at)}
+                    </time>
+                  </div>
+                  <p className="knowledge-answer-text">{message.content}</p>
+                  {message.role === "ASSISTANT" && (
+                    <div className="knowledge-sources">
+                      <div className="knowledge-sources-heading">
+                        <h3>Sources</h3>
+                        <span>
+                          {message.sources.length}{" "}
+                          {message.sources.length === 1 ? "source" : "sources"}
+                        </span>
+                      </div>
+                      {message.sources.length === 0 ? (
+                        <p className="knowledge-no-sources">
+                          No matching sources were found for this answer.
                         </p>
-                      </article>
-                    );
-                  })}
+                      ) : (
+                        <div className="knowledge-source-list">
+                          {message.sources.map((source, index) => {
+                            const note = notes.find(
+                              (item) => item.id === source.note_id,
+                            );
+                            const video = sourceVideo(
+                              source,
+                              activeConversation.scope,
+                              activeConversation.youtube_id,
+                            );
+                            const timestamp = metadataTimestamp(source);
+                            const timestampUrl =
+                              timestamp === null
+                                ? null
+                                : getYoutubeWatchUrl(
+                                    video?.youtubeId,
+                                    timestamp,
+                                  );
+                            const section =
+                              typeof source.metadata.section === "string"
+                                ? source.metadata.section.replaceAll("_", " ")
+                                : null;
+                            return (
+                              <article
+                                className="knowledge-source"
+                                key={`${source.chunk_id}-${index}`}
+                              >
+                                <div className="knowledge-source-heading">
+                                  <div>
+                                    <span className="knowledge-source-type">
+                                      {sourceTypeLabel(source)}
+                                    </span>
+                                    {(note?.title || video?.title || section) && (
+                                      <strong>
+                                        {note?.title ||
+                                          (video?.title !== "Selected video"
+                                            ? video?.title
+                                            : null) ||
+                                          section ||
+                                          "Video"}
+                                      </strong>
+                                    )}
+                                  </div>
+                                  {timestampUrl && timestamp !== null && (
+                                    <a
+                                      className="knowledge-timestamp-link"
+                                      href={timestampUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      <Clock3 size={13} aria-hidden="true" />
+                                      Open at {formatTimestamp(timestamp)}
+                                      <ExternalLink
+                                        size={12}
+                                        aria-hidden="true"
+                                      />
+                                    </a>
+                                  )}
+                                </div>
+                                <p className="knowledge-source-excerpt">
+                                  {source.content}
+                                </p>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </article>
+              ))}
+              {isAsking && (
+                <div className="knowledge-answer-loading" role="status">
+                  <span />
+                  <span />
+                  <p>Searching sources and preparing an answer...</p>
+                </div>
+              )}
+              {!activeConversation && !isConversationLoading && (
+                <div className="knowledge-answer-prompt">
+                  <span className="knowledge-prompt-icon">
+                    <BookOpen size={20} aria-hidden="true" />
+                  </span>
+                  <p>
+                    Start a conversation by asking a question. No conversation
+                    is saved until you submit.
+                  </p>
+                </div>
+              )}
+              {activeConversation?.messages.length === 0 && !isAsking && (
+                <div className="knowledge-answer-prompt">
+                  <span className="knowledge-prompt-icon">
+                    <BookOpen size={20} aria-hidden="true" />
+                  </span>
+                  <p>Ask a question to begin this conversation.</p>
                 </div>
               )}
             </div>
-          </>
-        ) : error ? (
-          <p className="knowledge-answer-prompt">
-            Review the context and question above, then retry.
-          </p>
-        ) : (
-          <div className="knowledge-answer-prompt">
-            <span className="knowledge-prompt-icon">
-              <BookOpen size={20} aria-hidden="true" />
-            </span>
-            <p>Ask a question to see a grounded answer and its sources.</p>
+
+            {!isConversationLoading && (
+              <form
+                className="knowledge-form knowledge-question-form"
+                onSubmit={(event) => void handleAsk(event)}
+              >
+                <label
+                  className="knowledge-field"
+                  htmlFor="knowledge-question"
+                >
+                  <span>Your question</span>
+                  <textarea
+                    id="knowledge-question"
+                    value={question}
+                    rows={3}
+                    placeholder="Ask a question about your notes or video knowledge..."
+                    disabled={isAsking}
+                    onChange={(event) => {
+                      setQuestion(event.target.value);
+                      setError(null);
+                    }}
+                  />
+                </label>
+                <div className="knowledge-form-footer">
+                  <span>
+                    {currentConversationScope === "PERSONAL_KB"
+                      ? "Searching your personal knowledge"
+                      : currentConversationScope === "CURRENT_VIDEO"
+                        ? "Searching knowledge for the selected video"
+                        : "Searching the video and your personal knowledge"}
+                  </span>
+                  <button
+                    className="knowledge-ask-button"
+                    type="submit"
+                    disabled={!canAsk}
+                  >
+                    {isAsking ? (
+                      <>
+                        <RefreshCw
+                          className="is-spinning"
+                          size={16}
+                          aria-hidden="true"
+                        />
+                        Generating...
+                      </>
+                    ) : error ? (
+                      <>
+                        <RefreshCw size={16} aria-hidden="true" />
+                        Try again
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={16} aria-hidden="true" />
+                        Ask AI
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
-        )}
-      </section>
+        </div>
+      </div>
     </section>
   );
 }

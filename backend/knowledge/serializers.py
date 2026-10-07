@@ -1,6 +1,120 @@
+import json
+import re
+
 from rest_framework import serializers
 
+from knowledge.models import Conversation, ConversationMessage
 from knowledge.services.retrieval import RetrievalScope
+
+
+class ConversationSourcesField(serializers.Field):
+    def to_representation(self, value):
+        if value is None:
+            return []
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError as error:
+                raise serializers.ValidationError(
+                    "Persisted conversation sources must be a JSON array."
+                ) from error
+        if not isinstance(value, list):
+            raise serializers.ValidationError(
+                "Persisted conversation sources must be a JSON array."
+            )
+
+        sources = []
+        for source in value:
+            if not isinstance(source, dict):
+                raise serializers.ValidationError(
+                    "Each persisted conversation source must be an object."
+                )
+            normalized_source = dict(source)
+            youtube_id = normalized_source.get("youtube_id")
+            if "youtube_id" in normalized_source and (
+                not isinstance(youtube_id, str)
+                or re.fullmatch(r"[A-Za-z0-9_-]{11}", youtube_id) is None
+            ):
+                normalized_source.pop("youtube_id")
+            sources.append(normalized_source)
+        return sources
+
+
+class ConversationContextSerializer(serializers.Serializer):
+    title = serializers.CharField(
+        required=False,
+        max_length=120,
+        allow_blank=False,
+        trim_whitespace=True,
+    )
+    scope = serializers.ChoiceField(choices=Conversation.Scope.choices)
+    youtube_id = serializers.RegexField(
+        regex=r"^[A-Za-z0-9_-]{11}$",
+        required=False,
+        allow_null=True,
+    )
+
+    def validate(self, attrs):
+        scope = attrs["scope"]
+        youtube_id = attrs.get("youtube_id")
+        if scope in (Conversation.Scope.CURRENT_VIDEO, Conversation.Scope.COMBINED):
+            if youtube_id is None:
+                raise serializers.ValidationError({
+                    "youtube_id": f"This field is required for {scope}."
+                })
+        elif youtube_id is not None:
+            raise serializers.ValidationError({
+                "youtube_id": f"This field is not valid for {scope}."
+            })
+        attrs["youtube_id"] = youtube_id
+        return attrs
+
+
+class ConversationRenameSerializer(serializers.Serializer):
+    title = serializers.CharField(
+        required=True,
+        max_length=120,
+        allow_blank=False,
+        trim_whitespace=True,
+    )
+
+
+class ConversationAskSerializer(serializers.Serializer):
+    question = serializers.CharField(
+        required=True,
+        allow_blank=False,
+        trim_whitespace=True,
+    )
+
+
+class ConversationMessageSerializer(serializers.ModelSerializer):
+    sources = ConversationSourcesField()
+
+    class Meta:
+        model = ConversationMessage
+        fields = ("id", "role", "content", "sources", "created_at")
+        read_only_fields = fields
+
+
+class ConversationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Conversation
+        fields = (
+            "id",
+            "title",
+            "scope",
+            "youtube_id",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+
+class ConversationDetailSerializer(ConversationSerializer):
+    messages = ConversationMessageSerializer(many=True, read_only=True)
+
+    class Meta(ConversationSerializer.Meta):
+        fields = ConversationSerializer.Meta.fields + ("messages",)
 
 
 class RAGQuestionSerializer(serializers.Serializer):

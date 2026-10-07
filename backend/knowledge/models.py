@@ -120,3 +120,61 @@ class PreviousContextJob(models.Model):
     @property
     def job_id(self) -> str:
         return str(self.id)
+
+
+class Conversation(models.Model):
+    class Scope(models.TextChoices):
+        CURRENT_VIDEO = "CURRENT_VIDEO", "Current video"
+        PERSONAL_KB = "PERSONAL_KB", "Personal knowledge"
+        COMBINED = "COMBINED", "Video and personal knowledge"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="knowledge_conversations",
+    )
+    title = models.CharField(max_length=120, default="New conversation")
+    scope = models.CharField(max_length=20, choices=Scope.choices)
+    youtube_id = models.CharField(max_length=11, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-updated_at", "-id")
+        indexes = [
+            models.Index(
+                fields=["user", "-updated_at"],
+                name="kn_conv_user_upd_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return self.title
+
+
+class ConversationMessage(models.Model):
+    class Role(models.TextChoices):
+        USER = "USER", "User"
+        ASSISTANT = "ASSISTANT", "Assistant"
+
+    conversation = models.ForeignKey(
+        Conversation,
+        on_delete=models.CASCADE,
+        related_name="messages",
+    )
+    role = models.CharField(max_length=10, choices=Role.choices)
+    content = models.TextField()
+    sources = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("created_at", "id")
+        indexes = [
+            models.Index(
+                fields=["conversation", "created_at"],
+                name="kn_msg_conv_created_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.get_role_display()} message in {self.conversation_id}"

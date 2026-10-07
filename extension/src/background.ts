@@ -66,7 +66,140 @@ chrome.action.onClicked.addListener(() => {
   });
 });
 
+async function respondToConversationRequest(
+  path: string,
+  method: "GET" | "POST" | "PATCH" | "DELETE",
+  sendResponse: (response: unknown) => void,
+  data?: unknown,
+): Promise<void> {
+  try {
+    const response = await fetch(
+      `http://localhost:8000/api/knowledge/conversations/${path}`,
+      {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Dev-User": "devuser",
+        },
+        ...(data === undefined ? {} : { body: JSON.stringify(data) }),
+      },
+    );
+    const responseText = await response.text();
+    let responseData: unknown = null;
+    if (responseText) {
+      try {
+        responseData = JSON.parse(responseText);
+      } catch {
+        if (response.ok) {
+          sendResponse({
+            success: false,
+            status: 502,
+            data: { detail: "The Conversations service returned invalid JSON." },
+          });
+          return;
+        }
+      }
+    }
+    sendResponse({
+      success: response.ok,
+      status: response.status,
+      data: responseData,
+    });
+  } catch (error) {
+    console.error("[YouTube Knowledge] Conversation request failed:", error);
+    sendResponse({
+      success: false,
+      status: 0,
+      data: { detail: "Could not reach the Conversations service." },
+    });
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === "LIST_CONVERSATIONS") {
+    void respondToConversationRequest("", "GET", sendResponse);
+    return true;
+  }
+
+  if (message.type === "CREATE_CONVERSATION") {
+    if (
+      typeof message.data !== "object" ||
+      message.data === null ||
+      Array.isArray(message.data)
+    ) {
+      sendResponse({
+        success: false,
+        status: 400,
+        data: { detail: "Conversation details are required." },
+      });
+      return;
+    }
+    void respondToConversationRequest("", "POST", sendResponse, message.data);
+    return true;
+  }
+
+  if (
+    message.type === "GET_CONVERSATION" ||
+    message.type === "ASK_CONVERSATION" ||
+    message.type === "RENAME_CONVERSATION" ||
+    message.type === "DELETE_CONVERSATION"
+  ) {
+    const conversationId = message.conversationId;
+    if (
+      typeof conversationId !== "number" ||
+      !Number.isSafeInteger(conversationId) ||
+      conversationId < 1
+    ) {
+      sendResponse({
+        success: false,
+        status: 400,
+        data: { detail: "A valid conversation ID is required." },
+      });
+      return;
+    }
+    const path = `${encodeURIComponent(String(conversationId))}/`;
+    if (message.type === "GET_CONVERSATION") {
+      void respondToConversationRequest(path, "GET", sendResponse);
+      return true;
+    }
+    if (message.type === "ASK_CONVERSATION") {
+      if (typeof message.question !== "string") {
+        sendResponse({
+          success: false,
+          status: 400,
+          data: { detail: "A question is required." },
+        });
+        return;
+      }
+      void respondToConversationRequest(
+        `${path}ask/`,
+        "POST",
+        sendResponse,
+        { question: message.question },
+      );
+      return true;
+    }
+    if (message.type === "RENAME_CONVERSATION") {
+      if (typeof message.title !== "string") {
+        sendResponse({
+          success: false,
+          status: 400,
+          data: { detail: "A conversation title is required." },
+        });
+        return;
+      }
+      void respondToConversationRequest(
+        path,
+        "PATCH",
+        sendResponse,
+        { title: message.title },
+      );
+      return true;
+    }
+    void respondToConversationRequest(path, "DELETE", sendResponse);
+    return true;
+  }
+
   if (message.type === "ASK_RAG") {
     const question =
       typeof message.question === "string" ? message.question.trim() : "";

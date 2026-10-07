@@ -1,6 +1,9 @@
 from django.urls import path
 
 from knowledge.views import (
+    ConversationAskView,
+    ConversationDetailView,
+    ConversationListCreateView,
     KnowledgeAskView,
     PreviousContextJobCreateView,
     PreviousContextJobStatusView,
@@ -10,6 +13,21 @@ from knowledge.views import (
 
 urlpatterns = [
     path("ask/", KnowledgeAskView.as_view(), name="knowledge-ask"),
+    path(
+        "conversations/",
+        ConversationListCreateView.as_view(),
+        name="knowledge-conversation-list-create",
+    ),
+    path(
+        "conversations/<int:conversation_id>/",
+        ConversationDetailView.as_view(),
+        name="knowledge-conversation-detail",
+    ),
+    path(
+        "conversations/<int:conversation_id>/ask/",
+        ConversationAskView.as_view(),
+        name="knowledge-conversation-ask",
+    ),
     path(
         "previous-context/",
         PreviousContextView.as_view(),

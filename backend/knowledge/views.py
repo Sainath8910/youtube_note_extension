@@ -7,8 +7,19 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from folders.models import Folder
-from knowledge.models import PreviousContextJob, PreviousContextJobStatus
+from knowledge.models import (
+    Conversation,
+    ConversationMessage,
+    PreviousContextJob,
+    PreviousContextJobStatus,
+)
 from knowledge.serializers import (
+    ConversationAskSerializer,
+    ConversationContextSerializer,
+    ConversationDetailSerializer,
+    ConversationMessageSerializer,
+    ConversationRenameSerializer,
+    ConversationSerializer,
     PreviousContextQuerySerializer,
     PreviousContextSerializer,
     RAGAnswerSerializer,
@@ -28,6 +39,171 @@ from knowledge.services.retrieval import (
 )
 from knowledge.services.previous_context_jobs import create_previous_context_job
 from videos.models import Video
+
+
+class ConversationListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        conversations = Conversation.objects.filter(user=request.user)
+        return Response(
+            ConversationSerializer(conversations, many=True).data,
+            status=status.HTTP_200_OK,
+        )
+
+    def post(self, request):
+        serializer = ConversationContextSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        values = serializer.validated_data
+        conversation = Conversation.objects.create(
+            user=request.user,
+            title=values.get("title") or "New conversation",
+            scope=values["scope"],
+            youtube_id=values["youtube_id"],
+        )
+        return Response(
+            ConversationSerializer(conversation).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class ConversationDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self, request, conversation_id):
+        try:
+            return Conversation.objects.get(
+                pk=conversation_id,
+                user=request.user,
+            )
+        except Conversation.DoesNotExist:
+            raise NotFound("Conversation not found.") from None
+
+    def get(self, request, conversation_id):
+        conversation = self.get_object(request, conversation_id)
+        return Response(
+            ConversationDetailSerializer(conversation).data,
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request, conversation_id):
+        conversation = self.get_object(request, conversation_id)
+        serializer = ConversationRenameSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        conversation.title = serializer.validated_data["title"]
+        conversation.save(update_fields=["title", "updated_at"])
+        return Response(
+            ConversationSerializer(conversation).data,
+            status=status.HTTP_200_OK,
+        )
+
+    def delete(self, request, conversation_id):
+        conversation = self.get_object(request, conversation_id)
+        conversation.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ConversationAskView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, conversation_id):
+        try:
+            conversation = Conversation.objects.get(
+                pk=conversation_id,
+                user=request.user,
+            )
+        except Conversation.DoesNotExist:
+            raise NotFound("Conversation not found.") from None
+
+        question_serializer = ConversationAskSerializer(data=request.data)
+        question_serializer.is_valid(raise_exception=True)
+        question = question_serializer.validated_data["question"]
+
+        context_serializer = ConversationContextSerializer(
+            data={
+                "scope": conversation.scope,
+                "youtube_id": conversation.youtube_id,
+            },
+        )
+        context_serializer.is_valid(raise_exception=True)
+        context = context_serializer.validated_data
+        scope = RetrievalScope[context["scope"]]
+        video = None
+        if scope in (RetrievalScope.CURRENT_VIDEO, RetrievalScope.COMBINED):
+            try:
+                video = Video.objects.get(youtube_id=context["youtube_id"])
+            except Video.DoesNotExist:
+                raise NotFound("Not found.") from None
+
+        user_message = ConversationMessage.objects.create(
+            conversation=conversation,
+            role=ConversationMessage.Role.USER,
+            content=question,
+        )
+        conversation.save(update_fields=["updated_at"])
+        retrieval_request = RetrievalRequest(
+            user=request.user,
+            query=question,
+            scope=scope,
+            video=video,
+        )
+        try:
+            answer = answer_question(
+                user=request.user,
+                question=question,
+                request=retrieval_request,
+            )
+        except KnowledgeContextAccessError:
+            user_message.delete()
+            raise NotFound("Not found.") from None
+        except KnowledgeRetrievalError:
+            user_message.delete()
+            return Response(
+                {"detail": "The knowledge retrieval request could not be completed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except RAGGenerationError:
+            user_message.delete()
+            return Response(
+                {"detail": "The AI service could not generate an answer."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        serialized_answer = RAGAnswerSerializer(answer).data
+        video_ids = {
+            source["video_id"]
+            for source in serialized_answer["sources"]
+            if source["video_id"] is not None
+        }
+        youtube_ids_by_video_id = dict(
+            Video.objects.filter(pk__in=video_ids).values_list("pk", "youtube_id")
+        )
+        persisted_sources = []
+        for source in serialized_answer["sources"]:
+            persisted_source = dict(source)
+            persisted_source.pop("distance", None)
+            youtube_id = youtube_ids_by_video_id.get(source["video_id"])
+            if youtube_id:
+                persisted_source["youtube_id"] = youtube_id
+            persisted_sources.append(persisted_source)
+
+        assistant_message = ConversationMessage.objects.create(
+            conversation=conversation,
+            role=ConversationMessage.Role.ASSISTANT,
+            content=serialized_answer["answer"],
+            sources=persisted_sources,
+        )
+        conversation.save(update_fields=["updated_at"])
+        return Response(
+            {
+                "conversation": ConversationSerializer(conversation).data,
+                "user_message": ConversationMessageSerializer(user_message).data,
+                "assistant_message": ConversationMessageSerializer(
+                    assistant_message
+                ).data,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class KnowledgeAskView(APIView):
