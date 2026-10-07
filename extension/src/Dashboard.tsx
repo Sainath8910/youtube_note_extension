@@ -148,8 +148,8 @@ const routeContent: Record<
   },
 };
 
-function locationFromHash(): DashboardLocation {
-  const path = window.location.hash.replace(/^#\/?/, "").split("?")[0];
+function locationFromHash(hash = window.location.hash): DashboardLocation {
+  const path = hash.replace(/^#\/?/, "").split("?")[0];
   if (path === "notes/new") {
     return {
       route: "notes",
@@ -191,6 +191,15 @@ function locationFromHash(): DashboardLocation {
   };
 }
 
+function isKnownDashboardHash(hash: string): boolean {
+  const path = hash.replace(/^#\/?/, "").split("?")[0];
+  return (
+    navigation.some((item) => item.route === path) ||
+    /^notes\/(?:new|\d+)$/.test(path) ||
+    /^folders\/\d+$/.test(path)
+  );
+}
+
 function Dashboard() {
   const [location, setLocation] = useState<DashboardLocation>(locationFromHash);
   const route = location.route;
@@ -205,6 +214,7 @@ function Dashboard() {
   const unsavedChangesRef = useRef(false);
   const savedNoteOverridesRef = useRef(new Map<number, DashboardNote>());
   const previousHashRef = useRef(window.location.hash || "#/dashboard");
+  const noteWorkspaceBackHashRef = useRef<string | null>(null);
   const [dashboardState, setDashboardState] = useState<DashboardState>({
     status: "loading",
   });
@@ -225,9 +235,19 @@ function Dashboard() {
         return;
       }
 
+      const nextLocation = locationFromHash(nextHash);
+      const previousLocation = locationFromHash(previousHashRef.current);
+      if (
+        nextLocation.noteWorkspace &&
+        !previousLocation.noteWorkspace &&
+        isKnownDashboardHash(previousHashRef.current)
+      ) {
+        noteWorkspaceBackHashRef.current = previousHashRef.current;
+      }
+
       unsavedChangesRef.current = false;
       previousHashRef.current = nextHash;
-      setLocation(locationFromHash());
+      setLocation(nextLocation);
       setMobileNavigationOpen(false);
     };
 
@@ -300,6 +320,22 @@ function Dashboard() {
     setDashboardState({ status: "loading" });
     setRetryCount((count) => count + 1);
   };
+  const navigateBackFromNote = () => {
+    if (
+      unsavedChangesRef.current &&
+      !window.confirm("You have unsaved changes. Discard them and leave?")
+    ) {
+      return;
+    }
+    unsavedChangesRef.current = false;
+
+    const previousDashboardHash = noteWorkspaceBackHashRef.current;
+    if (previousDashboardHash && isKnownDashboardHash(previousDashboardHash)) {
+      window.history.back();
+      return;
+    }
+    window.location.hash = "#/notes";
+  };
   const toggleMobileNavigation = () => {
     if (mobileNavigationOpen) {
       setMobileNavigationOpen(false);
@@ -364,9 +400,7 @@ function Dashboard() {
           }
           canRetry={dashboardState.status === "error"}
           onRetry={refreshDashboard}
-          onBackToNotes={() => {
-            window.location.hash = "#/notes";
-          }}
+          onBackToNotes={navigateBackFromNote}
         />
       );
     }
@@ -379,9 +413,7 @@ function Dashboard() {
         }
         location={workspaceLocation}
         note={workspaceNote}
-        onBackToNotes={() => {
-          window.location.hash = "#/notes";
-        }}
+        onBackToNotes={navigateBackFromNote}
         onDirtyChange={(dirty) => {
           unsavedChangesRef.current = dirty;
         }}
@@ -1236,7 +1268,7 @@ function NoteWorkspaceUnavailable({
             type="button"
             onClick={onBackToNotes}
           >
-            Back to Notes
+            Back
           </button>
         </div>
       </div>
@@ -1636,7 +1668,7 @@ function NoteWorkspace({
             onClick={onBackToNotes}
           >
             <ArrowLeft size={17} aria-hidden="true" />
-            <span>Back to Notes</span>
+            <span>Back</span>
           </button>
           <p className="workspace-brand">YOUTUBE KNOWLEDGE / NOTES</p>
           <div className="workspace-mode-switch" role="group" aria-label="Note mode">
