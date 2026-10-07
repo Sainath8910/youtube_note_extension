@@ -5,12 +5,14 @@ from dataclasses import dataclass
 from numbers import Real
 
 from knowledge.models import KnowledgeChunk
+from videos.models import VideoAnalysis
 
 
 SELECTED_BLOCK_MAX_CHARS = 4000
 NOTE_CONTEXT_MAX_CHARS = 8000
 TRANSCRIPT_CONTEXT_MAX_CHARS = 4000
-TOTAL_ASSISTANCE_CONTEXT_MAX_CHARS = 12000
+VIDEO_ANALYSIS_MAX_CHARS = 2000
+TOTAL_ASSISTANCE_CONTEXT_MAX_CHARS = 14000
 TRANSCRIPT_PRE_CONTEXT_SECONDS = 60
 TRANSCRIPT_POST_CONTEXT_SECONDS = 120
 NEIGHBOR_BLOCK_LIMIT = 2
@@ -51,6 +53,7 @@ class NoteAssistanceContext:
     selected: NoteContextBlock
     context: tuple[NoteContextBlock, ...]
     transcript: tuple["TranscriptContextChunk", ...] = ()
+    video_analysis: tuple["VideoAnalysisContextItem", ...] = ()
 
     def as_prompt_data(self) -> dict[str, object]:
         return {
@@ -60,6 +63,9 @@ class NoteAssistanceContext:
             ],
             "nearby_transcript": [
                 chunk.as_prompt_data() for chunk in self.transcript
+            ],
+            "video_analysis": [
+                item.as_prompt_data() for item in self.video_analysis
             ],
         }
 
@@ -78,6 +84,22 @@ class TranscriptContextChunk:
             "end_seconds": self.end_seconds,
             "content": self.content,
         }
+
+
+@dataclass(frozen=True)
+class VideoAnalysisContextItem:
+    section: str
+    subsection: str | None
+    content: str
+
+    def as_prompt_data(self) -> dict[str, str]:
+        item = {
+            "section": self.section,
+            "content": self.content,
+        }
+        if self.subsection is not None:
+            item["subsection"] = self.subsection
+        return item
 
 
 def resolve_transcript_timestamp(
@@ -214,6 +236,65 @@ def build_nearby_transcript_context(
         selected=note_context.selected,
         context=note_context.context,
         transcript=tuple(selected_transcript),
+        video_analysis=note_context.video_analysis,
+    )
+
+
+def build_video_analysis_context(
+    analysis: VideoAnalysis,
+    note_context: NoteAssistanceContext,
+) -> NoteAssistanceContext:
+    from knowledge.services.analysis_indexing import analysis_groups
+
+    context_chars = (
+        len(note_context.selected.content)
+        + sum(len(block.content) for block in note_context.context)
+        + sum(len(chunk.content) for chunk in note_context.transcript)
+    )
+    remaining_chars = min(
+        VIDEO_ANALYSIS_MAX_CHARS,
+        TOTAL_ASSISTANCE_CONTEXT_MAX_CHARS - context_chars,
+    )
+    selected_items = []
+
+    try:
+        groups = analysis_groups(analysis)
+        for section, subsection, entries in groups:
+            for content in entries:
+                item_chars = (
+                    len(section)
+                    + len(subsection or "")
+                    + len(content)
+                )
+                if item_chars > remaining_chars:
+                    return NoteAssistanceContext(
+                        selected=note_context.selected,
+                        context=note_context.context,
+                        transcript=note_context.transcript,
+                        video_analysis=tuple(selected_items),
+                    )
+                selected_items.append(
+                    VideoAnalysisContextItem(
+                        section=section,
+                        subsection=subsection,
+                        content=content,
+                    )
+                )
+                remaining_chars -= item_chars
+    except (
+        AttributeError,
+        OverflowError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ):
+        return note_context
+
+    return NoteAssistanceContext(
+        selected=note_context.selected,
+        context=note_context.context,
+        transcript=note_context.transcript,
+        video_analysis=tuple(selected_items),
     )
 
 

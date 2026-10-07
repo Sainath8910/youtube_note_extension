@@ -76,7 +76,7 @@ def _timestamped_content(section: str, item: dict[str, Any]) -> str:
     return text.strip()
 
 
-def _analysis_groups(
+def analysis_groups(
     analysis: VideoAnalysis,
 ) -> list[tuple[str, str | None, list[str]]]:
     groups: OrderedDict[tuple[str, str | None], list[str]] = OrderedDict()
@@ -159,7 +159,7 @@ def _analysis_groups(
 
 def _make_chunks(analysis: VideoAnalysis) -> list[dict[str, Any]]:
     chunks = []
-    for section, subsection, entries in _analysis_groups(analysis):
+    for section, subsection, entries in analysis_groups(analysis):
         current_entries = []
         current_length = 0
         for entry in entries:
