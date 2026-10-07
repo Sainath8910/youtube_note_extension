@@ -105,6 +105,7 @@ class VideoContextView(generics.RetrieveAPIView):
             "notes": NoteSerializer(
                 notes,
                 many=True,
+                context={"request": request},
             ).data,
         })
 

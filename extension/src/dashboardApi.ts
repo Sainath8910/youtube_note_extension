@@ -1,4 +1,10 @@
-import type { NoteBlock, NoteDocument, VideoNote } from "./noteDocument";
+import {
+  normalizeFolderPath,
+  type FolderPathItem,
+  type NoteBlock,
+  type NoteDocument,
+  type VideoNote,
+} from "./noteDocument";
 
 const RECENT_NOTES_LIMIT = 4;
 const RECENT_CREATION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -12,10 +18,7 @@ export interface DashboardVideoMetadata {
   thumbnail_url?: string;
 }
 
-export interface DashboardFolderPathItem {
-  id: number;
-  name: string;
-}
+export type DashboardFolderPathItem = FolderPathItem;
 
 export interface DashboardNote extends VideoNote {
   video_detail?: DashboardVideoMetadata | null;
@@ -95,24 +98,6 @@ function normalizeVideoMetadata(
     }
   }
   return metadata;
-}
-
-function normalizeFolderPath(value: unknown): DashboardFolderPathItem[] {
-  if (!Array.isArray(value)) return [];
-  const path: DashboardFolderPathItem[] = [];
-  for (const item of value) {
-    if (
-      !isObject(item) ||
-      typeof item.id !== "number" ||
-      !Number.isSafeInteger(item.id) ||
-      item.id < 1 ||
-      typeof item.name !== "string"
-    ) {
-      return [];
-    }
-    path.push({ id: item.id, name: item.name });
-  }
-  return path;
 }
 
 export function normalizeNote(value: unknown, index: number): DashboardNote {

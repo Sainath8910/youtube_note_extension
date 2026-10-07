@@ -24,6 +24,11 @@ export interface NoteDocument {
   [key: string]: unknown;
 }
 
+export interface FolderPathItem {
+  id: number;
+  name: string;
+}
+
 export interface VideoNote {
   id: number;
   title: string;
@@ -32,9 +37,34 @@ export interface VideoNote {
   note_type: string;
   video?: number | null;
   folder?: number | null;
+  folder_path?: FolderPathItem[];
   timestamp_seconds?: number | null;
   created_at?: string;
   updated_at?: string;
+}
+
+export function normalizeFolderPath(value: unknown): FolderPathItem[] {
+  if (!Array.isArray(value)) return [];
+
+  const path: FolderPathItem[] = [];
+  for (const item of value) {
+    if (
+      typeof item !== "object" ||
+      item === null ||
+      Array.isArray(item) ||
+      !("id" in item) ||
+      typeof item.id !== "number" ||
+      !Number.isSafeInteger(item.id) ||
+      item.id < 1 ||
+      !("name" in item) ||
+      typeof item.name !== "string"
+    ) {
+      return [];
+    }
+    path.push({ id: item.id, name: item.name });
+  }
+
+  return path;
 }
 
 function createDocumentBlockId(): string {

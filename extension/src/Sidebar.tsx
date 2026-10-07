@@ -48,6 +48,7 @@ import {
   createEmptyDocument,
   documentToPlainText,
   normalizeDocument,
+  normalizeFolderPath,
   type NoteBlock,
   type NoteBlockType,
   type NoteDocument,
@@ -1562,6 +1563,7 @@ interface NoteReaderProps {
   note: VideoNote;
   colors: ThemeColors;
   showTitle?: boolean;
+  showFolderPath?: boolean;
   enableTimestampJump?: boolean;
   onTimestampClick?: (seconds: number) => void;
 }
@@ -1570,6 +1572,7 @@ export function NoteReader({
   note,
   colors,
   showTitle = true,
+  showFolderPath = false,
   enableTimestampJump = true,
   onTimestampClick,
 }: NoteReaderProps) {
@@ -1595,6 +1598,7 @@ export function NoteReader({
           {note.title}
         </h1>
       )}
+      {showFolderPath && <FolderPathMetadata note={note} colors={colors} />}
 
       <div
         style={{
@@ -1734,6 +1738,42 @@ export function NoteReader({
         })}
       </div>
 
+    </div>
+  );
+}
+
+function FolderPathMetadata({
+  note,
+  colors,
+  compact = false,
+}: {
+  note: VideoNote;
+  colors: ThemeColors;
+  compact?: boolean;
+}) {
+  const folderPath = normalizeFolderPath(note.folder_path);
+  const label =
+    folderPath.length > 0
+      ? folderPath.map((folder) => folder.name).join(" / ")
+      : "No Folder";
+
+  return (
+    <div
+      title={label}
+      aria-label={`Folder path: ${label}`}
+      style={{
+        minWidth: 0,
+        maxWidth: "100%",
+        overflow: "hidden",
+        margin: compact ? "7px 0 0" : "-10px 0 18px",
+        color: colors.muted,
+        fontSize: 10,
+        lineHeight: 1.4,
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
     </div>
   );
 }
@@ -4865,6 +4905,12 @@ export default function Sidebar({
                               "Empty note"}
                           </div>
 
+                          <FolderPathMetadata
+                            note={note}
+                            colors={colors}
+                            compact
+                          />
+
                           {formatUpdatedAt(note.updated_at) && (
                             <div
                               style={{
@@ -4963,6 +5009,7 @@ export default function Sidebar({
           <NoteReader
             note={selectedNote}
             colors={colors}
+            showFolderPath
           />
         )}
 

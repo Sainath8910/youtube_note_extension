@@ -9,6 +9,7 @@ from django.test import TestCase as DjangoTestCase
 from rest_framework.test import APIClient
 from youtube_transcript_api._errors import YouTubeTranscriptApiException
 
+from folders.models import Folder
 from knowledge.models import KnowledgeChunk
 from knowledge.services.analysis_indexing import (
     VideoAnalysisIndexingError,
@@ -253,12 +254,27 @@ class VideoContextEndpointTests(DjangoTestCase):
             title="Example video",
         )
         other_user = User.objects.create_user(username="other-video-context-user")
+        programming = Folder.objects.create(
+            user=self.user,
+            name="Programming",
+        )
+        java = Folder.objects.create(
+            user=self.user,
+            name="Java",
+            parent=programming,
+        )
+        collections = Folder.objects.create(
+            user=self.user,
+            name="Collections",
+            parent=java,
+        )
         user_note = Note.objects.create(
             user=self.user,
             title="My note",
             document={"version": 1, "blocks": []},
             note_type=Note.NoteType.VIDEO,
             video=video,
+            folder=collections,
         )
         Note.objects.create(
             user=other_user,
@@ -278,6 +294,14 @@ class VideoContextEndpointTests(DjangoTestCase):
         self.assertEqual(
             [note["id"] for note in response.data["notes"]],
             [user_note.pk],
+        )
+        self.assertEqual(
+            response.data["notes"][0]["folder_path"],
+            [
+                {"id": programming.pk, "name": programming.name},
+                {"id": java.pk, "name": java.name},
+                {"id": collections.pk, "name": collections.name},
+            ],
         )
 
     def test_missing_video_preserves_unsaved_context_response(self):
