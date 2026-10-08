@@ -2,6 +2,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type FormEvent,
   type Ref,
 } from "react";
@@ -34,8 +35,14 @@ import {
 import {
   BlockEditor,
   NoteReader,
-  type ThemeColors,
 } from "./Sidebar";
+import {
+  getThemeColors,
+  readThemePreference,
+  subscribeToThemeChanges,
+  type Theme,
+  type ThemeColors,
+} from "./theme";
 import {
   createEmptyDocument,
   documentToPlainText,
@@ -214,6 +221,7 @@ function isKnownDashboardHash(hash: string): boolean {
 
 function Dashboard() {
   const [location, setLocation] = useState<DashboardLocation>(locationFromHash);
+  const [theme, setTheme] = useState<Theme>("dark");
   const route = location.route;
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
@@ -245,6 +253,26 @@ function Dashboard() {
     (selectedWorkspaceNote?.id === workspaceNoteId ||
       (dashboardState.status === "ready" &&
         dashboardState.data.notes.some((note) => note.id === workspaceNoteId)));
+
+  useEffect(() => {
+    let active = true;
+
+    void readThemePreference().then((nextTheme) => {
+      if (active) {
+        setTheme(nextTheme);
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    return subscribeToThemeChanges((nextTheme) => {
+      setTheme(nextTheme);
+    });
+  }, []);
 
   useEffect(() => {
     const handleRouteChange = () => {
@@ -397,6 +425,25 @@ function Dashboard() {
     menuButtonRef.current?.focus();
   };
   const currentRoute = navigation.find((item) => item.route === route);
+  const themeColors = getThemeColors(theme);
+  const dashboardShellStyle: CSSProperties = {
+    "--dashboard-bg": themeColors.panel,
+    "--sidebar-bg": themeColors.header,
+    "--surface": themeColors.surface,
+    "--surface-raised": themeColors.input,
+    "--border": themeColors.border,
+    "--border-soft": themeColors.border,
+    "--text-primary": themeColors.primaryText,
+    "--text-secondary": themeColors.text,
+    "--text-muted": themeColors.muted,
+    "--accent": themeColors.accent,
+    "--accent-strong": themeColors.accent,
+    "--accent-soft": themeColors.accentSoft,
+    "--accent-contrast": themeColors.accentContrast,
+    "--success": themeColors.success,
+    "--success-soft": themeColors.successSoft,
+    "--shadow-color": themeColors.shadow,
+  } as CSSProperties;
   const pageTitle = currentRoute?.label ?? "Dashboard";
   const pageDescription =
     route === "dashboard"
@@ -453,6 +500,7 @@ function Dashboard() {
             ? "new-note"
             : `note-${workspaceLocation.noteId}`
         }
+        colors={themeColors}
         location={workspaceLocation}
         note={workspaceNote}
         onBackToNotes={navigateBackFromNote}
@@ -499,7 +547,7 @@ function Dashboard() {
   }
 
   return (
-    <div className="dashboard-shell">
+    <div className="dashboard-shell" style={dashboardShellStyle}>
       {mobileNavigationOpen && (
         <button
           className="dashboard-backdrop"
@@ -1358,25 +1406,8 @@ interface NoteImprovementProposal {
   suggestedContent: string;
 }
 
-const dashboardNoteColors: ThemeColors = {
-  panel: "#0b1220",
-  header: "#0f172a",
-  surface: "#101827",
-  input: "#111827",
-  border: "#263449",
-  text: "#dbe4f0",
-  primaryText: "#f8fafc",
-  muted: "#94a3b8",
-  accent: "#67e8f9",
-  accentSoft: "#12303a",
-  videoActionBackground: "#164e63",
-  videoActionHoverBackground: "#0e7490",
-  videoActionText: "#ecfeff",
-  danger: "#f87171",
-  shadow: "rgba(0, 0, 0, 0.38)",
-};
-
 interface NoteWorkspaceProps {
+  colors: ThemeColors;
   location: Exclude<NoteWorkspaceLocation, null>;
   note: DashboardNote | null;
   onBackToNotes: () => void;
@@ -1434,6 +1465,7 @@ function NoteWorkspaceUnavailable({
 }
 
 function NoteWorkspace({
+  colors,
   location,
   note,
   onBackToNotes,
@@ -2352,7 +2384,7 @@ function NoteWorkspace({
               <div className="note-block-editor">
                 <BlockEditor
                   noteDocument={noteDocument}
-                  colors={dashboardNoteColors}
+                  colors={colors}
                   onChange={setNoteDocument}
                   renderBlockAssistance={renderBlockAssistance}
                   enableTimestampJump={false}
@@ -2367,7 +2399,7 @@ function NoteWorkspace({
             <div className="note-workspace-content">
               <NoteReader
                 note={note}
-                colors={dashboardNoteColors}
+                colors={colors}
                 showTitle={false}
                 enableTimestampJump={false}
                 onTimestampClick={

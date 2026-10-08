@@ -1,13 +1,21 @@
 .editor-special-action {
-  transition: background-color 0.15s ease, border-color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
 }
 
 .editor-special-action:hover:not(:disabled),
 .editor-special-action:focus-visible {
-  background: var(--editor-special-action-hover) !important;
+  transform: translateY(-1px);
+  border-color: var(--editor-special-hover, rgba(8, 145, 178, 0.55));
+  background: var(--editor-special-hover, rgba(8, 145, 178, 0.55));
+  box-shadow: 0 0 0 1px rgba(8, 145, 178, 0.18), 0 10px 18px rgba(15, 23, 42, 0.12);
 }
 
 .editor-special-action:focus-visible {
-  outline: 2px solid var(--editor-special-action-hover);
+  outline: 2px solid rgba(34, 211, 238, 0.6);
   outline-offset: 2px;
 }

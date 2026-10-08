@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { ThemeColors } from "./Sidebar";
+import type { ThemeColors } from "./theme";
 
 interface CopyButtonProps {
   value: string;

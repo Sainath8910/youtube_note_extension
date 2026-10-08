@@ -64,6 +64,15 @@ import {
   captureCurrentVideoScreenshot,
   isCurrentVideoPlayerAvailable,
 } from "./videoScreenshot";
+import {
+  getThemeColors,
+  isDarkTheme,
+  readThemePreference,
+  saveThemePreference,
+  subscribeToThemeChanges,
+  type Theme,
+  type ThemeColors,
+} from "./theme";
 export type {
   NoteBlock,
   NoteBlockType,
@@ -110,8 +119,6 @@ type PreviousContextLoadState =
 
 type ViewMode = "LIST" | "READER" | "WRITER" | "AI";
 
-type Theme = "dark" | "light";
-
 type PrimaryWorkspace = "NOTES" | "ANALYSIS";
 
 type NoteNavigationTab = "READ" | "WRITE" | "AI";
@@ -123,63 +130,7 @@ interface Position {
   y: number;
 }
 
-export interface ThemeColors {
-  panel: string;
-  header: string;
-  surface: string;
-  input: string;
-  border: string;
-  text: string;
-  primaryText: string;
-  muted: string;
-  accent: string;
-  accentSoft: string;
-  videoActionBackground: string;
-  videoActionHoverBackground: string;
-  videoActionText: string;
-  danger: string;
-  shadow: string;
-}
-
-const DARK_THEME: ThemeColors = {
-  panel: "#0b1220",
-  header: "#0f172a",
-  surface: "#101827",
-  input: "#111827",
-  border: "#263449",
-  text: "#dbe4f0",
-  primaryText: "#f8fafc",
-  muted: "#94a3b8",
-  accent: "#67e8f9",
-  accentSoft: "#12303a",
-  videoActionBackground: "#164e63",
-  videoActionHoverBackground: "#0e7490",
-  videoActionText: "#ecfeff",
-  danger: "#f87171",
-  shadow: "rgba(0, 0, 0, 0.38)",
-};
-
-const LIGHT_THEME: ThemeColors = {
-  panel: "#ffffff",
-  header: "#f8fafc",
-  surface: "#f1f5f9",
-  input: "#ffffff",
-  border: "#d7dee8",
-  text: "#334155",
-  primaryText: "#172033",
-  muted: "#64748b",
-  accent: "#0891b2",
-  accentSoft: "#ecfeff",
-  videoActionBackground: "#cffafe",
-  videoActionHoverBackground: "#a5f3fc",
-  videoActionText: "#155e75",
-  danger: "#dc2626",
-  shadow: "rgba(15, 23, 42, 0.18)",
-};
-
 const POSITION_STORAGE_KEY = "youtubeKnowledgeSidebarPosition";
-
-const THEME_STORAGE_KEY = "youtubeKnowledgeTheme";
 
 const SIDEBAR_WIDTH = 390;
 const SIDEBAR_HEIGHT_MARGIN = 30;
@@ -335,27 +286,6 @@ async function loadPosition(): Promise<Position> {
 function savePosition(position: Position): void {
   chrome.storage.local.set({
     [POSITION_STORAGE_KEY]: position,
-  });
-}
-
-async function loadTheme(): Promise<Theme> {
-  return new Promise((resolve) => {
-    chrome.storage.local.get([THEME_STORAGE_KEY], (result) => {
-      const stored = result[THEME_STORAGE_KEY];
-
-      if (stored === "light" || stored === "dark") {
-        resolve(stored);
-        return;
-      }
-
-      resolve("dark");
-    });
-  });
-}
-
-function saveTheme(theme: Theme): void {
-  chrome.storage.local.set({
-    [THEME_STORAGE_KEY]: theme,
   });
 }
 
@@ -1862,18 +1792,11 @@ export function BlockEditor({
                 + Equation
               </button>
 
-              <button
-                type="button"
-                onClick={() =>
-                  addBlock("timestamp", block.id, timestampContent())
-                }
-                style={{
-                  ...editorSpecialActionStyle(colors),
-                }}
-                className="editor-special-action"
-              >
-                + Timestamp
-              </button>
+              <SpecialActionButton
+                label="+ Timestamp"
+                colors={colors}
+                onClick={() => addBlock("timestamp", block.id, timestampContent())}
+              />
 
               <button
                 type="button"
@@ -1902,21 +1825,14 @@ export function BlockEditor({
               </button>
 
               {onCaptureScreenshot && (
-                <button
-                  type="button"
+                <SpecialActionButton
+                  label={isCapturingScreenshot ? "Capturing..." : "Capture Screenshot"}
+                  colors={colors}
                   disabled={isCapturingScreenshot}
+                  isSubmitting={isCapturingScreenshot}
                   onClick={() => void captureScreenshot(block.id)}
-                  style={{
-                    ...editorSpecialActionStyle(colors),
-                    opacity: isCapturingScreenshot ? 0.6 : 1,
-                  }}
-                  className="editor-special-action"
-                >
-                  <Camera size={12} aria-hidden="true" />
-                  {isCapturingScreenshot
-                    ? "Capturing..."
-                    : "Capture Screenshot"}
-                </button>
+                  icon={<Camera size={12} aria-hidden="true" />}
+                />
               )}
             </div>
             {renderBlockAssistance?.(block)}
@@ -2719,7 +2635,7 @@ function NoteWriter({ note, videoId, colors, onSaved }: NoteWriterProps) {
           borderRadius: 9,
           padding: "11px 14px",
           background: colors.accent,
-          color: colors.panel === "#0b1220" ? "#082f49" : "#ffffff",
+          color: colors.videoActionText,
           fontWeight: 800,
           cursor: isSaving ? "default" : "pointer",
           opacity: isSaving ? 0.6 : 1,
@@ -2940,7 +2856,7 @@ function AIWorkspace({
           borderRadius: 9,
           padding: "11px 14px",
           background: colors.accent,
-          color: colors.panel === "#0b1220" ? "#082f49" : "#ffffff",
+          color: colors.videoActionText,
           fontWeight: 800,
           cursor: isLoading ? "default" : "pointer",
           opacity: isLoading ? 0.7 : 1,
@@ -3201,7 +3117,7 @@ function AnalysisWorkspace({
             borderRadius: 8,
             padding: "10px 12px",
             background: colors.accent,
-            color: colors.panel === DARK_THEME.panel ? "#082f49" : "#ffffff",
+            color: colors.videoActionText,
             fontSize: 12,
             fontWeight: 800,
             cursor: isAnalyzing || !canAnalyze ? "default" : "pointer",
@@ -3509,6 +3425,26 @@ export default function Sidebar({
 
   const [theme, setTheme] = useState<Theme>("dark");
 
+  useEffect(() => {
+    let active = true;
+
+    void readThemePreference().then((loadedTheme) => {
+      if (active) {
+        setTheme(loadedTheme);
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    return subscribeToThemeChanges((nextTheme) => {
+      setTheme(nextTheme);
+    });
+  }, []);
+
   const [dragging, setDragging] = useState(false);
 
   const [minimizedDragging, setMinimizedDragging] = useState(false);
@@ -3596,12 +3532,6 @@ export default function Sidebar({
       }
     });
 
-    void loadTheme().then((loadedTheme) => {
-      if (mounted) {
-        setTheme(loadedTheme);
-      }
-    });
-
     return () => {
       mounted = false;
     };
@@ -3669,7 +3599,8 @@ export default function Sidebar({
     };
   }, []);
 
-  const colors = theme === "dark" ? DARK_THEME : LIGHT_THEME;
+  const isDark = isDarkTheme(theme);
+  const colors = getThemeColors(theme);
   const previousContextStatus =
     previousContextState.videoId === videoId
       ? previousContextState.status
@@ -3816,10 +3747,10 @@ export default function Sidebar({
   }
 
   function toggleTheme() {
-    const nextTheme: Theme = theme === "dark" ? "light" : "dark";
+    const nextTheme: Theme = isDarkTheme(theme) ? "light" : "dark";
 
     setTheme(nextTheme);
-    saveTheme(nextTheme);
+    saveThemePreference(nextTheme);
   }
 
   function openReader(note: VideoNote) {
@@ -4197,7 +4128,7 @@ export default function Sidebar({
             onPointerDown={(event) => event.stopPropagation()}
             onClick={toggleTheme}
             title={
-              theme === "dark" ? "Switch to day mode" : "Switch to night mode"
+              isDark ? "Switch to day mode" : "Switch to night mode"
             }
             style={{
               ...topIconButton,
@@ -4205,7 +4136,7 @@ export default function Sidebar({
               borderColor: colors.border,
             }}
           >
-            {theme === "dark" ? (
+            {isDark ? (
               <Sun size={15} aria-hidden="true" />
             ) : (
               <Moon size={15} aria-hidden="true" />
@@ -5468,7 +5399,7 @@ export default function Sidebar({
                   borderRadius: 8,
                   padding: "8px 10px",
                   background: colors.accent,
-                  color: theme === "dark" ? "#082f49" : "#ffffff",
+                  color: colors.videoActionText,
                   fontSize: 11,
                   fontWeight: 800,
                   cursor: "pointer",
@@ -5549,7 +5480,7 @@ export default function Sidebar({
                       borderRadius: 8,
                       padding: "9px 12px",
                       background: colors.accent,
-                      color: theme === "dark" ? "#082f49" : "#ffffff",
+                      color: colors.videoActionText,
                       fontSize: 11,
                       fontWeight: 800,
                       cursor: isFetchingTranscript ? "default" : "pointer",
@@ -5944,19 +5875,62 @@ const smallToolButton: CSSProperties = {
   cursor: "pointer",
 };
 
-interface EditorSpecialActionStyle extends CSSProperties {
-  "--editor-special-action-hover": string;
-}
-
 function editorSpecialActionStyle(
   colors: ThemeColors,
-): EditorSpecialActionStyle {
+  variant: "neutral" | "accent" = "neutral",
+): CSSProperties {
+  if (variant === "neutral") {
+    return {
+      ...smallToolButton,
+      color: colors.muted,
+      borderColor: colors.border,
+      background: "transparent",
+      fontWeight: 650,
+    } as CSSProperties;
+  }
+
   return {
     ...smallToolButton,
     color: colors.videoActionText,
-    borderColor: colors.accent,
+    borderColor: colors.videoActionBackground,
     background: colors.videoActionBackground,
     fontWeight: 650,
-    "--editor-special-action-hover": colors.videoActionHoverBackground,
-  };
+    boxShadow: `0 0 0 1px ${colors.videoActionBackground}`,
+    ["--editor-special-hover" as string]: colors.videoActionHoverBackground,
+  } as CSSProperties;
+}
+
+function SpecialActionButton({
+  label,
+  colors,
+  onClick,
+  disabled,
+  isSubmitting = false,
+  icon,
+  variant = "neutral",
+}: {
+  label: string;
+  colors: ThemeColors;
+  onClick?: () => void;
+  disabled?: boolean;
+  isSubmitting?: boolean;
+  icon?: ReactNode;
+  variant?: "neutral" | "accent";
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        ...editorSpecialActionStyle(colors, variant),
+        opacity: disabled || isSubmitting ? 0.6 : 1,
+        cursor: disabled ? "not-allowed" : "pointer",
+      }}
+      className="editor-special-action"
+    >
+      {icon}
+      {isSubmitting ? "Capturing..." : label}
+    </button>
+  );
 }
