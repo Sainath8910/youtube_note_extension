@@ -528,7 +528,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "LIST_VIDEOS") {
-    void respondToVideoRequest("", sendResponse);
+    const query = new URLSearchParams();
+    const videoListParameters = [
+      ["page", message.page],
+      ["page_size", message.pageSize],
+      ["q", message.query],
+      ["transcript", message.transcriptFilter],
+      ["analysis", message.analysisFilter],
+      ["sort", message.sort],
+    ] as const;
+    for (const [name, value] of videoListParameters) {
+      if (typeof value === "string" && value) {
+        query.set(name, value);
+      } else if (
+        typeof value === "number" &&
+        Number.isSafeInteger(value) &&
+        value > 0
+      ) {
+        query.set(name, String(value));
+      }
+    }
+    const queryString = query.toString();
+    void respondToVideoRequest(
+      queryString ? `?${queryString}` : "",
+      sendResponse,
+    );
     return true;
   }
 

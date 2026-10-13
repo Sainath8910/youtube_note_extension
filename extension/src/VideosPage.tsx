@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
@@ -18,16 +18,17 @@ import {
 } from "lucide-react";
 import type { DashboardNote } from "./dashboardApi";
 import {
-  filterAndSortDashboardVideos,
   getDashboardVideoAnalysis,
   getDashboardVideoDetails,
   getDashboardVideoTranscript,
   generateDashboardVideoAnalysis,
   generateDashboardVideoTranscript,
   hasUsableVideoAnalysis,
+  isVideoApiNotFound,
   listDashboardVideos,
   toVideoAvailability,
   type LibraryVideo,
+  type VideoLibraryPage,
   type VideoAnalysis,
   type VideoAvailability,
   type VideoSortOrder,
@@ -38,8 +39,8 @@ import "./videos.css";
 
 type LoadState<T> =
   | { status: "loading" }
-  | { status: "error"; message: string }
-  | { status: "ready"; data: T };
+  | { status: "error"; message: string; requestKey?: string }
+  | { status: "ready"; data: T; requestKey?: string };
 
 export type VideoTab = "transcript" | "analysis" | "notes";
 
@@ -110,7 +111,7 @@ export function VideosLibraryPage({
 }: {
   onOpenVideo: (youtubeId: string) => void;
 }) {
-  const [state, setState] = useState<LoadState<LibraryVideo[]>>({
+  const [state, setState] = useState<LoadState<VideoLibraryPage>>({
     status: "loading",
   });
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -121,20 +122,43 @@ export function VideosLibraryPage({
   const [analysisFilter, setAnalysisFilter] =
     useState<VideoStatusFilter>("all");
   const [sort, setSort] = useState<VideoSortOrder>("updated");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(12);
+  const requestKey = JSON.stringify([
+    page,
+    pageSize,
+    query,
+    transcriptFilter,
+    analysisFilter,
+    sort,
+  ]);
 
   useEffect(() => {
     let active = true;
-    listDashboardVideos()
-      .then((videos) => {
-        if (active) setState({ status: "ready", data: videos });
+    listDashboardVideos({
+      page,
+      pageSize,
+      query,
+      transcriptFilter,
+      analysisFilter,
+      sort,
+    })
+      .then((result) => {
+        if (active) {
+          setState({ status: "ready", data: result, requestKey });
+        }
       })
       .catch((error: unknown) => {
-        if (active) {
-          setState({
-            status: "error",
-            message: errorMessage(error, "Could not load your videos."),
-          });
+        if (!active) return;
+        if (page > 1 && isVideoApiNotFound(error)) {
+          setPage((currentPage) => Math.max(1, currentPage - 1));
+          return;
         }
+        setState({
+          status: "error",
+          message: errorMessage(error, "Could not load your videos."),
+          requestKey,
+        });
       })
       .finally(() => {
         if (active) setIsRefreshing(false);
@@ -142,27 +166,39 @@ export function VideosLibraryPage({
     return () => {
       active = false;
     };
-  }, [refreshCount]);
+  }, [
+    page,
+    pageSize,
+    query,
+    transcriptFilter,
+    analysisFilter,
+    sort,
+    refreshCount,
+    requestKey,
+  ]);
 
-  const videos = state.status === "ready" ? state.data : EMPTY_VIDEOS;
-  const filteredVideos = useMemo(
-    () =>
-      filterAndSortDashboardVideos(
-        videos,
-        query,
-        transcriptFilter,
-        analysisFilter,
-        sort,
-      ),
-    [videos, query, transcriptFilter, analysisFilter, sort],
-  );
+  const currentState =
+    isRefreshing ||
+    (state.status !== "loading" && state.requestKey !== requestKey)
+      ? { status: "loading" as const }
+      : state;
+  const videos =
+    currentState.status === "ready"
+      ? currentState.data.results
+      : EMPTY_VIDEOS;
+  const totalCount =
+    currentState.status === "ready" ? currentState.data.count : 0;
+  const totalPages = Math.ceil(totalCount / pageSize);
+  const firstResult = totalCount === 0 ? 0 : (page - 1) * pageSize + 1;
+  const lastResult = Math.min(page * pageSize, totalCount);
   const hasFilters =
     query.trim() !== "" ||
     transcriptFilter !== "all" ||
     analysisFilter !== "all";
-  const refreshing = state.status === "loading" || isRefreshing;
+  const refreshing = currentState.status === "loading" || isRefreshing;
 
   const clearFilters = () => {
+    setPage(1);
     setQuery("");
     setTranscriptFilter("all");
     setAnalysisFilter("all");
@@ -174,8 +210,8 @@ export function VideosLibraryPage({
         <div className="video-library-total" aria-live="polite">
           <Clapperboard size={17} aria-hidden="true" />
           <span>
-            {state.status === "ready"
-              ? `${state.data.length} ${state.data.length === 1 ? "video" : "videos"}`
+            {currentState.status === "ready"
+              ? `${currentState.data.count} ${currentState.data.count === 1 ? "video" : "videos"}`
               : "Your video library"}
           </span>
         </div>
@@ -204,7 +240,10 @@ export function VideosLibraryPage({
           <input
             type="search"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setPage(1);
+              setQuery(event.target.value);
+            }}
             placeholder="Search titles and channels"
             aria-label="Search videos by title or channel"
           />
@@ -215,7 +254,10 @@ export function VideosLibraryPage({
             value={transcriptFilter}
             onChange={(event) => {
               const value = event.target.value;
-              if (isVideoStatusFilter(value)) setTranscriptFilter(value);
+              if (isVideoStatusFilter(value)) {
+                setPage(1);
+                setTranscriptFilter(value);
+              }
             }}
           >
             <option value="all">All statuses</option>
@@ -232,7 +274,10 @@ export function VideosLibraryPage({
             value={analysisFilter}
             onChange={(event) => {
               const value = event.target.value;
-              if (isVideoStatusFilter(value)) setAnalysisFilter(value);
+              if (isVideoStatusFilter(value)) {
+                setPage(1);
+                setAnalysisFilter(value);
+              }
             }}
           >
             <option value="all">All statuses</option>
@@ -249,7 +294,10 @@ export function VideosLibraryPage({
             value={sort}
             onChange={(event) => {
               const value = event.target.value;
-              if (isVideoSortOrder(value)) setSort(value);
+              if (isVideoSortOrder(value)) {
+                setPage(1);
+                setSort(value);
+              }
             }}
           >
             <option value="updated">Recently updated</option>
@@ -261,125 +309,177 @@ export function VideosLibraryPage({
         </label>
       </div>
 
-      {state.status === "loading" ? (
+      {currentState.status === "loading" ? (
         <div className="video-page-state" role="status" aria-busy="true">
           <span className="video-page-spinner" aria-hidden="true" />
           <p>Loading your videos…</p>
         </div>
-      ) : state.status === "error" ? (
+      ) : currentState.status === "error" ? (
         <div className="video-page-state is-error" role="alert">
           <AlertCircle size={21} aria-hidden="true" />
           <div>
             <strong>Videos could not be loaded</strong>
-            <p>{state.message}</p>
+            <p>{currentState.message}</p>
             <button
               className="inline-action"
               type="button"
-              onClick={() => setRefreshCount((count) => count + 1)}
+              onClick={() => {
+                setIsRefreshing(true);
+                setRefreshCount((count) => count + 1);
+              }}
             >
               Try again
             </button>
           </div>
         </div>
-      ) : videos.length === 0 ? (
-        <div className="video-page-state">
-          <span className="video-empty-icon">
-            <VideoIcon size={21} aria-hidden="true" />
-          </span>
-          <div>
-            <strong>No videos found in your library yet.</strong>
-            <p>
-              Save a video note from the YouTube sidebar to add that video to
-              your library.
-            </p>
-            <a href="https://www.youtube.com/" target="_blank" rel="noreferrer">
-              Open YouTube <ArrowUpRight size={13} aria-hidden="true" />
-            </a>
-          </div>
-        </div>
-      ) : filteredVideos.length === 0 ? (
-        <div className="video-page-state">
-          <Search size={20} aria-hidden="true" />
-          <div>
-            <strong>No videos match these filters.</strong>
-            <p>Try another search or clear your current filters.</p>
-            {hasFilters && (
-              <button
-                className="inline-action"
-                type="button"
-                onClick={clearFilters}
-              >
-                Clear search and filters
-              </button>
+      ) : (
+        videos.length === 0 ? (
+          <div className="video-page-state">
+            {totalCount === 0 && !hasFilters ? (
+              <>
+                <span className="video-empty-icon">
+                  <VideoIcon size={21} aria-hidden="true" />
+                </span>
+                <div>
+                  <strong>No videos found in your library yet.</strong>
+                  <p>
+                    Save a video note from the YouTube sidebar to add that
+                    video to your library.
+                  </p>
+                  <a href="https://www.youtube.com/" target="_blank" rel="noreferrer">
+                    Open YouTube <ArrowUpRight size={13} aria-hidden="true" />
+                  </a>
+                </div>
+              </>
+            ) : (
+              <div>
+                <strong>No videos match these filters.</strong>
+                <p>Try another search or clear your current filters.</p>
+                {hasFilters && (
+                  <button
+                    className="inline-action"
+                    type="button"
+                    onClick={clearFilters}
+                  >
+                    Clear search and filters
+                  </button>
+                )}
+              </div>
             )}
           </div>
-        </div>
-      ) : (
-        <div className="video-library-list">
-          {filteredVideos.map((video) => (
-            <article className="video-library-card" key={video.youtube_id}>
-              <button
-                type="button"
-                className="video-thumbnail-button"
-                onClick={() => onOpenVideo(video.youtube_id)}
-                aria-label={`Open ${video.title || "video details"}`}
-              >
-                {video.thumbnail_url ? (
-                  <img
-                    src={video.thumbnail_url}
-                    alt=""
-                    loading="lazy"
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <span className="video-thumbnail-placeholder">
-                    <VideoIcon size={26} aria-hidden="true" />
-                  </span>
-                )}
-                <span className="video-thumbnail-play">
-                  <Play size={15} fill="currentColor" aria-hidden="true" />
+        ) : (
+          <>
+            <div className="video-library-list">
+              {videos.map((video) => (
+                <article className="video-library-card" key={video.youtube_id}>
+                  <button
+                    type="button"
+                    className="video-thumbnail-button"
+                    onClick={() => onOpenVideo(video.youtube_id)}
+                    aria-label={`Open ${video.title || "video details"}`}
+                  >
+                    {video.thumbnail_url ? (
+                      <img
+                        src={video.thumbnail_url}
+                        alt=""
+                        loading="lazy"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <span className="video-thumbnail-placeholder">
+                        <VideoIcon size={26} aria-hidden="true" />
+                      </span>
+                    )}
+                    <span className="video-thumbnail-play">
+                      <Play size={15} fill="currentColor" aria-hidden="true" />
+                    </span>
+                  </button>
+                  <div className="video-library-card-copy">
+                    <button
+                      className="video-library-title"
+                      type="button"
+                      onClick={() => onOpenVideo(video.youtube_id)}
+                    >
+                      {video.title || "Untitled video"}
+                    </button>
+                    <p className="video-library-channel">
+                      {video.channel_name || "YouTube video"}
+                    </p>
+                    <div className="video-library-card-meta">
+                      <span>
+                        <FileText size={13} aria-hidden="true" />
+                        {video.notes_count}{" "}
+                        {video.notes_count === 1 ? "note" : "notes"}
+                      </span>
+                      <StatusBadge
+                        status={video.transcript_availability}
+                        label="Transcript"
+                      />
+                      <StatusBadge
+                        status={video.analysis_availability}
+                        label="AI analysis"
+                      />
+                    </div>
+                    <p className="video-library-updated">
+                      Updated {formatDate(video.updated_at)}
+                    </p>
+                  </div>
+                  <button
+                    className="video-open-button"
+                    type="button"
+                    onClick={() => onOpenVideo(video.youtube_id)}
+                  >
+                    View details <ArrowUpRight size={14} aria-hidden="true" />
+                  </button>
+                </article>
+              ))}
+            </div>
+            <nav className="video-pagination" aria-label="Video library pages">
+              <p aria-live="polite">
+                Showing {firstResult}–{lastResult} of {totalCount}{" "}
+                {totalCount === 1 ? "video" : "videos"}
+              </p>
+              <div className="video-pagination-controls">
+                <label className="video-page-size">
+                  <span>Per page</span>
+                  <select
+                    value={pageSize}
+                    onChange={(event) => {
+                      const nextPageSize = Number(event.target.value);
+                      if ([12, 24, 50].includes(nextPageSize)) {
+                        setPage(1);
+                        setPageSize(nextPageSize);
+                      }
+                    }}
+                  >
+                    <option value={12}>12</option>
+                    <option value={24}>24</option>
+                    <option value={50}>50</option>
+                  </select>
+                </label>
+                <span className="video-pagination-current">
+                  Page {page} of {totalPages}
                 </span>
-              </button>
-              <div className="video-library-card-copy">
                 <button
-                  className="video-library-title"
+                  className="workspace-secondary-button"
                   type="button"
-                  onClick={() => onOpenVideo(video.youtube_id)}
+                  disabled={page <= 1 || refreshing}
+                  onClick={() => setPage((currentPage) => currentPage - 1)}
                 >
-                  {video.title || "Untitled video"}
+                  Previous
                 </button>
-                <p className="video-library-channel">
-                  {video.channel_name || "YouTube video"}
-                </p>
-                <div className="video-library-card-meta">
-                  <span>
-                    <FileText size={13} aria-hidden="true" />
-                    {video.notes_count}{" "}
-                    {video.notes_count === 1 ? "note" : "notes"}
-                  </span>
-                  <StatusBadge
-                    status={video.transcript_availability}
-                    label="Transcript"
-                  />
-                  <StatusBadge
-                    status={video.analysis_availability}
-                    label="AI analysis"
-                  />
-                </div>
-                <p className="video-library-updated">
-                  Updated {formatDate(video.updated_at)}
-                </p>
+                <button
+                  className="workspace-secondary-button"
+                  type="button"
+                  disabled={page >= totalPages || refreshing}
+                  onClick={() => setPage((currentPage) => currentPage + 1)}
+                >
+                  Next
+                </button>
               </div>
-              <button
-                className="video-open-button"
-                type="button"
-                onClick={() => onOpenVideo(video.youtube_id)}
-              >
-                View details <ArrowUpRight size={14} aria-hidden="true" />
-              </button>
-            </article>
-          ))}
-        </div>
+            </nav>
+          </>
+        )
       )}
     </section>
   );

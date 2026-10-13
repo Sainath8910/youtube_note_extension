@@ -1,11 +1,13 @@
 import json
 import os
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
 import yt_dlp
 from django.test import TestCase as DjangoTestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 from youtube_transcript_api._errors import YouTubeTranscriptApiException
 
@@ -341,7 +343,145 @@ class VideoLibraryEndpointTests(DjangoTestCase):
         response = self.client.get("/api/videos/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data, {"results": [], "count": 0})
+        self.assertEqual(
+            response.data,
+            {
+                "count": 0,
+                "next": None,
+                "previous": None,
+                "results": [],
+            },
+        )
+
+    def test_library_paginates_in_stable_updated_order(self):
+        videos = []
+        now = timezone.now()
+        for index in range(5):
+            video = Video.objects.create(
+                youtube_id=f"v{index:010d}",
+                title=f"Video {index}",
+            )
+            Video.objects.filter(pk=video.pk).update(
+                updated_at=now + timedelta(seconds=index),
+            )
+            Note.objects.create(
+                user=self.user,
+                title=f"Note {index}",
+                document={"version": 1, "blocks": []},
+                note_type=Note.NoteType.VIDEO,
+                video=video,
+            )
+            videos.append(video)
+
+        first_page = self.client.get(
+            "/api/videos/?page=1&page_size=2",
+        )
+        second_page = self.client.get(
+            "/api/videos/?page=2&page_size=2",
+        )
+
+        self.assertEqual(first_page.status_code, 200)
+        self.assertEqual(first_page.data["count"], 5)
+        self.assertIsNotNone(first_page.data["next"])
+        self.assertIsNone(first_page.data["previous"])
+        self.assertEqual(
+            [item["youtube_id"] for item in first_page.data["results"]],
+            [videos[4].youtube_id, videos[3].youtube_id],
+        )
+        self.assertEqual(
+            [item["youtube_id"] for item in second_page.data["results"]],
+            [videos[2].youtube_id, videos[1].youtube_id],
+        )
+        self.assertIsNotNone(second_page.data["next"])
+        self.assertIsNotNone(second_page.data["previous"])
+
+    def test_page_size_is_capped_and_results_are_scoped_to_user(self):
+        for index in range(51):
+            video = Video.objects.create(
+                youtube_id=f"v{index:010d}",
+                title=f"Video {index}",
+            )
+            Note.objects.create(
+                user=self.user,
+                title=f"Note {index}",
+                document={"version": 1, "blocks": []},
+                note_type=Note.NoteType.VIDEO,
+                video=video,
+            )
+        another_video = Video.objects.create(
+            youtube_id="other000001",
+            title="Another user's video",
+        )
+        Note.objects.create(
+            user=self.other_user,
+            title="Other user's note",
+            document={"version": 1, "blocks": []},
+            note_type=Note.NoteType.VIDEO,
+            video=another_video,
+        )
+
+        response = self.client.get("/api/videos/?page_size=100")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 51)
+        self.assertEqual(len(response.data["results"]), 50)
+        self.assertIsNotNone(response.data["next"])
+
+    def test_invalid_page_parameters_and_out_of_range_page(self):
+        invalid_page = self.client.get("/api/videos/?page=zero")
+        invalid_page_size = self.client.get("/api/videos/?page_size=0")
+        out_of_range = self.client.get("/api/videos/?page=2&page_size=1")
+
+        self.assertEqual(invalid_page.status_code, 400)
+        self.assertEqual(invalid_page_size.status_code, 400)
+        self.assertEqual(out_of_range.status_code, 404)
+
+    def test_search_filter_sort_and_count_apply_before_pagination(self):
+        matching_titles = [
+            ("abcdefghijk", "Matching Zebra", Video.TranscriptStatus.READY),
+            ("zyxwvutsrqp", "Matching Alpha", Video.TranscriptStatus.FAILED),
+        ]
+        for youtube_id, title, transcript_status in matching_titles:
+            video = Video.objects.create(
+                youtube_id=youtube_id,
+                title=title,
+                transcript_status=transcript_status,
+                transcript=(
+                    [{"text": "Saved", "start": 0, "duration": 1}]
+                    if transcript_status == Video.TranscriptStatus.READY
+                    else None
+                ),
+            )
+            Note.objects.create(
+                user=self.user,
+                title=f"Note for {title}",
+                document={"version": 1, "blocks": []},
+                note_type=Note.NoteType.VIDEO,
+                video=video,
+            )
+        unrelated = Video.objects.create(
+            youtube_id="mnopqrstuvw",
+            title="Unrelated",
+        )
+        Note.objects.create(
+            user=self.user,
+            title="Note for unrelated",
+            document={"version": 1, "blocks": []},
+            note_type=Note.NoteType.VIDEO,
+            video=unrelated,
+        )
+
+        response = self.client.get(
+            "/api/videos/?q=matching&transcript=available&sort=title&page_size=1",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(
+            response.data["results"][0]["youtube_id"],
+            "abcdefghijk",
+        )
+        self.assertIsNone(response.data["next"])
 
     def test_lists_only_associated_videos_with_user_specific_note_counts(self):
         video = Video.objects.create(

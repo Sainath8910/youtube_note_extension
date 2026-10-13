@@ -1,11 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   filterAndSortDashboardVideos,
   hasUsableVideoAnalysis,
+  listDashboardVideos,
   matchesVideoSearch,
   toVideoAvailability,
   type LibraryVideo,
 } from "./videoApi";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function video(
   overrides: Partial<LibraryVideo> & Pick<LibraryVideo, "youtube_id">,
@@ -66,6 +71,97 @@ describe("video library filtering and sorting", () => {
     expect(matchesVideoSearch(videos[0], "zEb")).toBe(true);
     expect(matchesVideoSearch(videos[0], "LEARNING")).toBe(true);
     expect(matchesVideoSearch(videos[1], "unmatched")).toBe(false);
+  });
+
+  describe("video library API pagination", () => {
+    it("requests a page and validates the paginated API response", async () => {
+      const result = video({
+        youtube_id: "abcdefghijk",
+        title: "Recent video",
+      });
+      const sendMessage = vi.fn(
+        (
+          _message: unknown,
+          callback: (response: unknown) => void,
+        ) => {
+          callback({
+            success: true,
+            data: {
+              count: 25,
+              next: "http://localhost:8000/api/videos/?page=2",
+              previous: null,
+              results: [result],
+            },
+          });
+        },
+      );
+      vi.stubGlobal("chrome", {
+        runtime: {
+          id: "test-extension",
+          lastError: null,
+          sendMessage,
+        },
+      });
+
+      const page = await listDashboardVideos({
+        page: 1,
+        pageSize: 5,
+        sort: "updated",
+      });
+
+      expect(page).toEqual({
+        count: 25,
+        next: "http://localhost:8000/api/videos/?page=2",
+        previous: null,
+        results: [result],
+      });
+      expect(sendMessage).toHaveBeenCalledWith(
+        {
+          type: "LIST_VIDEOS",
+          page: 1,
+          pageSize: 5,
+          sort: "updated",
+        },
+        expect.any(Function),
+      );
+    });
+
+    it("deduplicates concurrent requests for the same page", async () => {
+      const sendMessage = vi.fn(
+        (
+          _message: unknown,
+          callback: (response: unknown) => void,
+        ) => {
+          callback({
+            success: true,
+            data: {
+              count: 0,
+              next: null,
+              previous: null,
+              results: [],
+            },
+          });
+        },
+      );
+      vi.stubGlobal("chrome", {
+        runtime: {
+          id: "test-extension",
+          lastError: null,
+          sendMessage,
+        },
+      });
+
+      const firstRequest = listDashboardVideos({ page: 1, pageSize: 5 });
+      const duplicateRequest = listDashboardVideos({
+        page: 1,
+        pageSize: 5,
+        sort: "updated",
+      });
+
+      expect(duplicateRequest).toBe(firstRequest);
+      await firstRequest;
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("combines transcript and analysis filters independently", () => {

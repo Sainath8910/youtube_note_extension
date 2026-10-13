@@ -8,6 +8,22 @@ export type VideoAvailability =
 export type VideoStatusFilter = "all" | VideoAvailability;
 export type VideoSortOrder = "added" | "updated" | "title" | "notes";
 
+export interface VideoLibraryPage {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: LibraryVideo[];
+}
+
+export interface VideoLibraryQuery {
+  page?: number;
+  pageSize?: number;
+  query?: string;
+  transcriptFilter?: VideoStatusFilter;
+  analysisFilter?: VideoStatusFilter;
+  sort?: VideoSortOrder;
+}
+
 export interface LibraryVideo {
   id: number;
   youtube_id: string;
@@ -51,6 +67,11 @@ function isAvailability(value: unknown): value is VideoAvailability {
   );
 }
 
+const pendingVideoListRequests = new Map<
+  string,
+  Promise<VideoLibraryPage>
+>();
+
 function isVideo(value: unknown): value is LibraryVideo {
   return (
     isObject(value) &&
@@ -80,6 +101,20 @@ function apiMessage(value: unknown): string | null {
   if (typeof value.detail === "string") return value.detail;
   if (typeof value.error === "string") return value.error;
   return null;
+}
+
+class VideoApiError extends Error {
+  readonly status: number | undefined;
+
+  constructor(message: string, status: number | undefined) {
+    super(message);
+    this.name = "VideoApiError";
+    this.status = status;
+  }
+}
+
+export function isVideoApiNotFound(error: unknown): boolean {
+  return error instanceof VideoApiError && error.status === 404;
 }
 
 const ignoredAnalysisFields = new Set([
@@ -131,11 +166,12 @@ function sendVideoCommand(message: Record<string, unknown>): Promise<unknown> {
       }
       if (!response.success) {
         reject(
-          new Error(
+          new VideoApiError(
             apiMessage(response.data) ??
               (typeof response.error === "string"
                 ? response.error
                 : "Could not complete the video request."),
+            typeof response.status === "number" ? response.status : undefined,
           ),
         );
         return;
@@ -145,18 +181,62 @@ function sendVideoCommand(message: Record<string, unknown>): Promise<unknown> {
   });
 }
 
-export async function listDashboardVideos(): Promise<LibraryVideo[]> {
-  const data = await sendVideoCommand({ type: "LIST_VIDEOS" });
+export function listDashboardVideos(
+  query: VideoLibraryQuery = {},
+): Promise<VideoLibraryPage> {
+  const requestKey = JSON.stringify({
+    page: query.page ?? 1,
+    pageSize: query.pageSize ?? 12,
+    query: query.query ?? "",
+    transcriptFilter: query.transcriptFilter ?? "all",
+    analysisFilter: query.analysisFilter ?? "all",
+    sort: query.sort ?? "updated",
+  });
+  const pendingRequest = pendingVideoListRequests.get(requestKey);
+  if (pendingRequest) return pendingRequest;
+
+  const request = requestDashboardVideos(query);
+  pendingVideoListRequests.set(requestKey, request);
+  void request.then(
+    () => {
+      if (pendingVideoListRequests.get(requestKey) === request) {
+        pendingVideoListRequests.delete(requestKey);
+      }
+    },
+    () => {
+      if (pendingVideoListRequests.get(requestKey) === request) {
+        pendingVideoListRequests.delete(requestKey);
+      }
+    },
+  );
+  return request;
+}
+
+async function requestDashboardVideos(
+  query: VideoLibraryQuery,
+): Promise<VideoLibraryPage> {
+  const data = await sendVideoCommand({
+    type: "LIST_VIDEOS",
+    ...query,
+  });
   if (
     !isObject(data) ||
     !Array.isArray(data.results) ||
     !data.results.every(isVideo) ||
     typeof data.count !== "number" ||
-    data.count !== data.results.length
+    !Number.isSafeInteger(data.count) ||
+    data.count < data.results.length ||
+    !(data.next === null || typeof data.next === "string") ||
+    !(data.previous === null || typeof data.previous === "string")
   ) {
     throw new Error("The videos API returned an invalid video list.");
   }
-  return data.results;
+  return {
+    count: data.count,
+    next: data.next,
+    previous: data.previous,
+    results: data.results,
+  };
 }
 
 export async function getDashboardVideoDetails(

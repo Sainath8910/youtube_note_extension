@@ -112,6 +112,7 @@ import {
   VideosLibraryPage,
   type VideoTab,
 } from "./VideosPage";
+import { listDashboardVideos, type LibraryVideo } from "./videoApi";
 
 type DashboardRoute =
   | "dashboard"
@@ -1052,7 +1053,66 @@ function RecentNotes({
   );
 }
 
+type RecentVideosState =
+  | { status: "loading" }
+  | { status: "error"; message: string; attempt: number }
+  | { status: "ready"; videos: LibraryVideo[]; attempt: number };
+
 function RecentVideos() {
+  const [state, setState] = useState<RecentVideosState>({
+    status: "loading",
+  });
+  const [retryCount, setRetryCount] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    listDashboardVideos({
+      page: 1,
+      pageSize: 5,
+      sort: "updated",
+    })
+      .then((page) => {
+        if (active) {
+          setState({
+            status: "ready",
+            videos: page.results,
+            attempt: retryCount,
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setState({
+          status: "error",
+          attempt: retryCount,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Could not load your recent videos.",
+        });
+      });
+    return () => {
+      active = false;
+    };
+  }, [retryCount]);
+
+  useEffect(() => {
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        setRetryCount((count) => count + 1);
+      }
+    };
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, []);
+
+  const currentState =
+    state.status !== "loading" && state.attempt !== retryCount
+      ? { status: "loading" as const }
+      : state;
+
   return (
     <section className="content-card recent-videos" aria-labelledby="recent-videos-heading">
       <div className="card-heading">
@@ -1063,20 +1123,105 @@ function RecentVideos() {
             </span>
             <h2 id="recent-videos-heading">Recent videos</h2>
           </div>
-          <p>Your learning queue</p>
+          <p>Recently updated in your library</p>
         </div>
+        <a className="text-link" href="#/videos">
+          View all <ArrowUpRight size={14} aria-hidden="true" />
+        </a>
       </div>
-      <div className="empty-state video-empty-state">
-        <span className="empty-state-icon">
-          <Clapperboard size={20} aria-hidden="true" />
-        </span>
-        <h3>No video library yet</h3>
-        <p>
-          A video-list API is not available yet. Video-linked notes are still
-          available in Notes.
-        </p>
-      </div>
+      {currentState.status === "loading" ? (
+        <div
+          className="recent-video-loading"
+          role="status"
+          aria-label="Loading recent videos"
+          aria-busy="true"
+        >
+          {Array.from({ length: 3 }, (_, index) => (
+            <span key={index} />
+          ))}
+        </div>
+      ) : currentState.status === "error" ? (
+        <div className="recent-video-state is-error" role="alert">
+          <strong>Recent videos could not be loaded</strong>
+          <p>{currentState.message}</p>
+          <button
+            className="inline-action"
+            type="button"
+            onClick={() => setRetryCount((count) => count + 1)}
+          >
+            Retry
+          </button>
+        </div>
+      ) : currentState.videos.length === 0 ? (
+        <div className="empty-state video-empty-state">
+          <span className="empty-state-icon">
+            <Clapperboard size={20} aria-hidden="true" />
+          </span>
+          <h3>No saved videos yet</h3>
+          <p>
+            Videos linked to your saved notes will appear here.
+          </p>
+          <a className="secondary-link" href="#/videos">
+            Open Videos <ArrowUpRight size={14} aria-hidden="true" />
+          </a>
+        </div>
+      ) : (
+        <div className="recent-video-list">
+          {currentState.videos.map((video) => (
+            <RecentVideoCard key={video.youtube_id} video={video} />
+          ))}
+        </div>
+      )}
     </section>
+  );
+}
+
+function RecentVideoCard({ video }: { video: LibraryVideo }) {
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  let thumbnailUrl: string | null = null;
+  try {
+    const candidate = new URL(video.thumbnail_url);
+    if (candidate.protocol === "https:" || candidate.protocol === "http:") {
+      thumbnailUrl = candidate.toString();
+    }
+  } catch {
+    thumbnailUrl = null;
+  }
+
+  return (
+    <button
+      className="recent-video-card"
+      type="button"
+      onClick={() => {
+        window.location.hash = `#/videos/${encodeURIComponent(video.youtube_id)}`;
+      }}
+      aria-label={`Open ${video.title || "Untitled video"}`}
+    >
+      <span className="recent-video-thumbnail">
+        {thumbnailUrl && !thumbnailFailed ? (
+          <img
+            src={thumbnailUrl}
+            alt=""
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            onError={() => setThumbnailFailed(true)}
+          />
+        ) : (
+          <Clapperboard size={18} aria-hidden="true" />
+        )}
+      </span>
+      <span className="recent-video-copy">
+        <strong>{video.title.trim() || "Untitled video"}</strong>
+        <span>
+          {video.notes_count} {video.notes_count === 1 ? "note" : "notes"}
+          {" · "}
+          Transcript {video.transcript_availability}
+          {" · "}
+          Analysis {video.analysis_availability}
+        </span>
+      </span>
+      <ArrowUpRight size={14} aria-hidden="true" />
+    </button>
   );
 }
 

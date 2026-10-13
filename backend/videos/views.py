@@ -2,10 +2,11 @@ import logging
 import re
 
 from django.db.models import Count, Max, Q
-from django.db.models.functions import Coalesce, Greatest
+from django.db.models.functions import Coalesce, Greatest, Lower
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import generics, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -17,6 +18,7 @@ from knowledge.services.analysis_indexing import index_video_analysis
 from knowledge.services.transcript_indexing import index_video_transcript
 
 from .models import Video, VideoAnalysis
+from .pagination import VideoLibraryPagination
 from .services.analysis import (
     AnalysisError,
     TranscriptNotReadyError,
@@ -144,13 +146,138 @@ class VideoContextView(generics.RetrieveAPIView):
 
 
 class VideoLibraryView(APIView):
+    pagination_class = VideoLibraryPagination
+    availability_filters = {"all", "available", "missing", "processing", "failed"}
+    sort_orders = {"updated", "added", "title", "notes"}
+
     def get(self, request):
-        videos = _videos_for_user(request.user).order_by(
-            "-library_updated_at",
-            "youtube_id",
+        videos = _videos_for_user(request.user)
+        query = request.query_params.get("q", "").strip()
+        if query:
+            videos = videos.filter(
+                Q(title__icontains=query)
+                | Q(channel_name__icontains=query)
+            )
+
+        transcript_filter = request.query_params.get("transcript", "all")
+        analysis_filter = request.query_params.get("analysis", "all")
+        for name, value in (
+            ("transcript", transcript_filter),
+            ("analysis", analysis_filter),
+        ):
+            if value not in self.availability_filters:
+                raise ValidationError(
+                    {name: "Choose a valid availability filter."},
+                )
+
+        if transcript_filter != "all":
+            videos = self._filter_transcript_availability(
+                videos,
+                transcript_filter,
+            )
+        if analysis_filter != "all":
+            videos = self._filter_analysis_availability(
+                videos,
+                analysis_filter,
+            )
+
+        sort_order = request.query_params.get("sort", "updated")
+        if sort_order not in self.sort_orders:
+            raise ValidationError(
+                {"sort": "Choose a valid video sort order."},
+            )
+        orderings = {
+            "updated": ("-library_updated_at", "youtube_id"),
+            "added": ("-created_at", "youtube_id"),
+            "title": (Lower("title"), "youtube_id"),
+            "notes": ("-notes_count", Lower("title"), "youtube_id"),
+        }
+        videos = videos.order_by(*orderings[sort_order])
+
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(videos, request, view=self)
+        serializer = VideoLibrarySerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+    @staticmethod
+    def _filter_transcript_availability(videos, availability):
+        usable_transcript = (
+            Q(transcript_status=Video.TranscriptStatus.READY)
+            & Q(transcript__isnull=False)
+            & ~Q(transcript=[])
         )
-        results = VideoLibrarySerializer(videos, many=True).data
-        return Response({"results": results, "count": len(results)})
+        filters = {
+            "available": usable_transcript,
+            "processing": Q(
+                transcript_status=Video.TranscriptStatus.FETCHING,
+            ),
+            "failed": Q(transcript_status=Video.TranscriptStatus.FAILED),
+            "missing": (
+                Q(transcript_status=Video.TranscriptStatus.NOT_STARTED)
+                | (
+                    Q(transcript_status=Video.TranscriptStatus.READY)
+                    & ~usable_transcript
+                )
+            ),
+        }
+        return videos.filter(filters[availability])
+
+    @staticmethod
+    def _filter_analysis_availability(videos, availability):
+        analysis_has_content = (
+            Q(analysis__summary__gt="")
+            | (
+                Q(analysis__detailed_notes__isnull=False)
+                & ~Q(analysis__detailed_notes={})
+            )
+            | (
+                Q(analysis__topics__isnull=False)
+                & ~Q(analysis__topics=[])
+            )
+            | (
+                Q(analysis__concepts__isnull=False)
+                & ~Q(analysis__concepts=[])
+            )
+            | (
+                Q(analysis__prerequisites__isnull=False)
+                & ~Q(analysis__prerequisites=[])
+            )
+            | (
+                Q(analysis__upcoming_topics__isnull=False)
+                & ~Q(analysis__upcoming_topics=[])
+            )
+            | (
+                Q(analysis__key_points__isnull=False)
+                & ~Q(analysis__key_points=[])
+            )
+            | (
+                Q(analysis__claims__isnull=False)
+                & ~Q(analysis__claims=[])
+            )
+            | (
+                Q(analysis__questions__isnull=False)
+                & ~Q(analysis__questions=[])
+            )
+        )
+        usable_analysis = (
+            Q(analysis_status=Video.AnalysisStatus.READY)
+            & analysis_has_content
+        )
+        filters = {
+            "available": usable_analysis,
+            "processing": Q(
+                analysis_status=Video.AnalysisStatus.ANALYZING,
+            ),
+            "failed": Q(analysis_status=Video.AnalysisStatus.FAILED),
+            "missing": (
+                Q(analysis_status=Video.AnalysisStatus.NOT_STARTED)
+                | (
+                    Q(analysis_status=Video.AnalysisStatus.READY)
+                    & ~analysis_has_content
+                )
+            ),
+        }
+        return videos.filter(filters[availability])
 
 
 class VideoDetailView(APIView):
