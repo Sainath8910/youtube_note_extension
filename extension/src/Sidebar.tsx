@@ -1843,7 +1843,7 @@ export function BlockEditor({
                 }
                 style={{
                   ...smallToolButton,
-                  color: colors.accent,
+                  color: colors.muted,
                   borderColor: colors.border,
                 }}
               >
@@ -1883,7 +1883,7 @@ export function BlockEditor({
                   onClick={() => void captureScreenshot(block.id)}
                   style={{
                     ...smallToolButton,
-                    color: colors.accent,
+                    color: colors.muted,
                     borderColor: colors.border,
                     opacity: isCapturingScreenshot ? 0.6 : 1,
                   }}

@@ -532,6 +532,9 @@ function Dashboard() {
               onNavigateToNotes={() => {
                 window.location.hash = "#/notes";
               }}
+              onOpenNote={(noteId) => {
+                window.location.hash = `#/notes/${noteId}`;
+              }}
             />
           ) : route === "notes" ? (
             <NotesPage
@@ -679,12 +682,14 @@ interface DashboardHomeProps {
   dashboardState: DashboardState;
   onRetry: () => void;
   onNavigateToNotes: () => void;
+  onOpenNote: (noteId: number) => void;
 }
 
 function DashboardHome({
   dashboardState,
   onRetry,
   onNavigateToNotes,
+  onOpenNote,
 }: DashboardHomeProps) {
   return (
     <>
@@ -697,6 +702,7 @@ function DashboardHome({
           dashboardState={dashboardState}
           onRetry={onRetry}
           onViewAll={onNavigateToNotes}
+          onOpenNote={onOpenNote}
         />
         <RecentVideos />
       </div>
@@ -868,12 +874,14 @@ interface RecentNotesProps {
   dashboardState: DashboardState;
   onRetry: () => void;
   onViewAll: () => void;
+  onOpenNote: (noteId: number) => void;
 }
 
 function RecentNotes({
   dashboardState,
   onRetry,
   onViewAll,
+  onOpenNote,
 }: RecentNotesProps) {
   return (
     <section className="content-card recent-notes" aria-labelledby="recent-notes-heading">
@@ -900,6 +908,7 @@ function RecentNotes({
         }
         onRetry={onRetry}
         onViewNotes={onViewAll}
+        onSelectNote={onOpenNote}
         compact
       />
     </section>
