@@ -1,9 +1,21 @@
 from django.urls import path
 
-from .views import TranscriptView, VideoAnalysisView, VideoContextView
+from .views import (
+    TranscriptView,
+    VideoAnalysisView,
+    VideoContextView,
+    VideoDetailView,
+    VideoLibraryView,
+)
 
 
 urlpatterns = [
+    path("", VideoLibraryView.as_view(), name="video-library"),
+    path(
+        "<str:youtube_id>/details/",
+        VideoDetailView.as_view(),
+        name="video-detail",
+    ),
     path(
         "<str:youtube_id>/transcript/",
         TranscriptView.as_view(),

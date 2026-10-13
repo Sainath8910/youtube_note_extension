@@ -1,6 +1,8 @@
 import logging
 import re
 
+from django.db.models import Count, Max, Q
+from django.db.models.functions import Coalesce, Greatest
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import generics, status
@@ -27,10 +29,41 @@ from .services.transcript import (
     TranscriptUnavailableError,
     fetch_youtube_transcript,
 )
-from .serializers import VideoAnalysisSerializer, VideoSerializer
+from .serializers import (
+    VideoAnalysisSerializer,
+    VideoLibrarySerializer,
+    VideoSerializer,
+)
 
 logger = logging.getLogger(__name__)
 _YOUTUBE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+
+def _videos_for_user(user):
+    return (
+        Video.objects.filter(
+            Q(notes__user=user) | Q(viewing_sessions__user=user)
+        )
+        .annotate(
+            notes_count=Count(
+                "notes",
+                filter=Q(
+                    notes__user=user,
+                    notes__note_type=Note.NoteType.VIDEO,
+                ),
+                distinct=True,
+            ),
+            library_updated_at=Coalesce(
+                Greatest(
+                    "updated_at",
+                    Max("notes__updated_at", filter=Q(notes__user=user)),
+                ),
+                "updated_at",
+            ),
+        )
+        .select_related("analysis")
+        .distinct()
+    )
 
 
 def _ensure_transcript_indexed_for_user(video, user):
@@ -110,7 +143,57 @@ class VideoContextView(generics.RetrieveAPIView):
         })
 
 
+class VideoLibraryView(APIView):
+    def get(self, request):
+        videos = _videos_for_user(request.user).order_by(
+            "-library_updated_at",
+            "youtube_id",
+        )
+        results = VideoLibrarySerializer(videos, many=True).data
+        return Response({"results": results, "count": len(results)})
+
+
+class VideoDetailView(APIView):
+    def get(self, request, youtube_id):
+        if not _YOUTUBE_ID_PATTERN.fullmatch(youtube_id):
+            return Response(
+                {"error": "Invalid YouTube video ID."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        video = get_object_or_404(
+            _videos_for_user(request.user),
+            youtube_id=youtube_id,
+        )
+        notes = Note.objects.filter(
+            user=request.user,
+            video=video,
+            note_type=Note.NoteType.VIDEO,
+        ).select_related("folder", "video")
+        return Response(
+            {
+                "video": VideoLibrarySerializer(video).data,
+                "notes": NoteSerializer(
+                    notes,
+                    many=True,
+                    context={"request": request},
+                ).data,
+            }
+        )
+
+
 class TranscriptView(APIView):
+    def get(self, request, youtube_id):
+        if not _YOUTUBE_ID_PATTERN.fullmatch(youtube_id):
+            return Response(
+                {"error": "Invalid YouTube video ID."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        video = get_object_or_404(
+            _videos_for_user(request.user),
+            youtube_id=youtube_id,
+        )
+        return self._response(video)
+
     def post(self, request, youtube_id):
         if not _YOUTUBE_ID_PATTERN.fullmatch(youtube_id):
             return Response(
@@ -209,6 +292,37 @@ class TranscriptView(APIView):
 
 
 class VideoAnalysisView(APIView):
+    def get(self, request, youtube_id):
+        if not _YOUTUBE_ID_PATTERN.fullmatch(youtube_id):
+            return Response(
+                {"error": "Invalid YouTube video ID."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            video = _videos_for_user(request.user).get(
+                youtube_id=youtube_id,
+            )
+        except Video.DoesNotExist:
+            return Response(
+                {"error": "Video not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        try:
+            analysis = video.analysis
+        except VideoAnalysis.DoesNotExist:
+            analysis = None
+        return Response(
+            {
+                "status": video.analysis_status,
+                "video_id": video.youtube_id,
+                "analysis": (
+                    VideoAnalysisSerializer(analysis).data
+                    if analysis is not None
+                    else None
+                ),
+            }
+        )
+
     def post(self, request, youtube_id):
         if not _YOUTUBE_ID_PATTERN.fullmatch(youtube_id):
             return Response(

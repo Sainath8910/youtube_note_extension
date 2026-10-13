@@ -328,6 +328,308 @@ class VideoContextEndpointTests(DjangoTestCase):
         )
 
 
+class VideoLibraryEndpointTests(DjangoTestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="video-library-user")
+        self.other_user = User.objects.create_user(
+            username="other-video-library-user",
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def test_empty_library_returns_empty_results(self):
+        response = self.client.get("/api/videos/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, {"results": [], "count": 0})
+
+    def test_lists_only_associated_videos_with_user_specific_note_counts(self):
+        video = Video.objects.create(
+            youtube_id="abcdefghijk",
+            title="Saved video",
+            transcript_status=Video.TranscriptStatus.READY,
+            transcript=[
+                {"text": "Saved transcript.", "start": 0, "duration": 2},
+            ],
+            analysis_status=Video.AnalysisStatus.READY,
+        )
+        VideoAnalysis.objects.create(video=video, summary="Saved summary.")
+        for index in range(2):
+            Note.objects.create(
+                user=self.user,
+                title=f"Video note {index}",
+                document={"version": 1, "blocks": []},
+                note_type=Note.NoteType.VIDEO,
+                video=video,
+            )
+        Note.objects.create(
+            user=self.user,
+            title="Standalone note",
+            document={"version": 1, "blocks": []},
+            note_type=Note.NoteType.STANDALONE,
+        )
+        Note.objects.create(
+            user=self.other_user,
+            title="Another user's note",
+            document={"version": 1, "blocks": []},
+            note_type=Note.NoteType.VIDEO,
+            video=video,
+        )
+        Video.objects.create(
+            youtube_id="zyxwvutsrqp",
+            title="Other user's video",
+        )
+        other_video = Video.objects.get(youtube_id="zyxwvutsrqp")
+        Note.objects.create(
+            user=self.other_user,
+            title="Other user's only note",
+            document={"version": 1, "blocks": []},
+            note_type=Note.NoteType.VIDEO,
+            video=other_video,
+        )
+
+        response = self.client.get("/api/videos/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        result = response.data["results"][0]
+        self.assertEqual(result["youtube_id"], video.youtube_id)
+        self.assertEqual(
+            result["youtube_url"],
+            "https://www.youtube.com/watch?v=abcdefghijk",
+        )
+        self.assertEqual(result["notes_count"], 2)
+        self.assertEqual(result["transcript_availability"], "available")
+        self.assertEqual(result["analysis_availability"], "available")
+
+    def test_maps_missing_processing_and_failed_statuses(self):
+        missing = Video.objects.create(youtube_id="abcdefghijk")
+        fetching = Video.objects.create(
+            youtube_id="zyxwvutsrqp",
+            transcript_status=Video.TranscriptStatus.FETCHING,
+            analysis_status=Video.AnalysisStatus.ANALYZING,
+        )
+        failed = Video.objects.create(
+            youtube_id="mnopqrstuvw",
+            transcript_status=Video.TranscriptStatus.FAILED,
+            analysis_status=Video.AnalysisStatus.FAILED,
+        )
+        for video in (missing, fetching, failed):
+            Note.objects.create(
+                user=self.user,
+                title=f"Note {video.youtube_id}",
+                document={"version": 1, "blocks": []},
+                note_type=Note.NoteType.VIDEO,
+                video=video,
+            )
+
+        response = self.client.get("/api/videos/")
+
+        results = {
+            item["youtube_id"]: item
+            for item in response.data["results"]
+        }
+        self.assertEqual(
+            results[missing.youtube_id]["transcript_availability"],
+            "missing",
+        )
+        self.assertEqual(
+            results[missing.youtube_id]["analysis_availability"],
+            "missing",
+        )
+        self.assertEqual(
+            results[fetching.youtube_id]["transcript_availability"],
+            "processing",
+        )
+        self.assertEqual(
+            results[fetching.youtube_id]["analysis_availability"],
+            "processing",
+        )
+        self.assertEqual(
+            results[failed.youtube_id]["transcript_availability"],
+            "failed",
+        )
+        self.assertEqual(
+            results[failed.youtube_id]["analysis_availability"],
+            "failed",
+        )
+
+    def test_user_viewing_session_includes_video_without_notes(self):
+        video = Video.objects.create(youtube_id="abcdefghijk")
+        video.viewing_sessions.create(user=self.user)
+
+        response = self.client.get("/api/videos/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["notes_count"], 0)
+
+    def test_ready_status_requires_usable_saved_content(self):
+        video = Video.objects.create(
+            youtube_id="abcdefghijk",
+            transcript_status=Video.TranscriptStatus.READY,
+            transcript=[{"text": "No timestamp fields"}],
+            analysis_status=Video.AnalysisStatus.READY,
+        )
+        VideoAnalysis.objects.create(video=video)
+        Note.objects.create(
+            user=self.user,
+            title="Associated note",
+            document={"version": 1, "blocks": []},
+            note_type=Note.NoteType.VIDEO,
+            video=video,
+        )
+
+        result = self.client.get("/api/videos/").data["results"][0]
+
+        self.assertEqual(result["transcript_availability"], "missing")
+        self.assertEqual(result["analysis_availability"], "missing")
+
+    def test_library_requires_authentication(self):
+        self.client.force_authenticate(user=None)
+
+        response = self.client.get("/api/videos/")
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_saved_transcript_and_analysis_read_endpoints_do_not_generate(self):
+        video = Video.objects.create(youtube_id="abcdefghijk")
+        Note.objects.create(
+            user=self.user,
+            title="Associated note",
+            document={"version": 1, "blocks": []},
+            note_type=Note.NoteType.VIDEO,
+            video=video,
+        )
+        with (
+            patch("videos.views.fetch_youtube_transcript") as fetch_transcript,
+            patch("videos.views.analyze_video") as analyze_video_mock,
+        ):
+            transcript_response = self.client.get(
+                "/api/videos/abcdefghijk/transcript/",
+            )
+            analysis_response = self.client.get(
+                "/api/videos/abcdefghijk/analyze/",
+            )
+
+        self.assertEqual(transcript_response.status_code, 200)
+        self.assertEqual(
+            transcript_response.data["transcript_status"],
+            Video.TranscriptStatus.NOT_STARTED,
+        )
+        self.assertIsNone(transcript_response.data["transcript"])
+        self.assertEqual(analysis_response.status_code, 200)
+        self.assertIsNone(analysis_response.data["analysis"])
+        fetch_transcript.assert_not_called()
+        analyze_video_mock.assert_not_called()
+        self.assertEqual(video.analysis_status, Video.AnalysisStatus.NOT_STARTED)
+
+    def test_read_endpoints_reject_invalid_ids_and_missing_video(self):
+        invalid = self.client.get("/api/videos/not-an-id/transcript/")
+        missing = self.client.get("/api/videos/abcdefghijk/analyze/")
+
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(missing.status_code, 404)
+
+    def test_video_detail_contains_only_the_current_users_notes(self):
+        video = Video.objects.create(
+            youtube_id="abcdefghijk",
+            title="Shared metadata",
+        )
+        own_note = Note.objects.create(
+            user=self.user,
+            title="My note",
+            document={"version": 1, "blocks": []},
+            note_type=Note.NoteType.VIDEO,
+            video=video,
+        )
+        Note.objects.create(
+            user=self.other_user,
+            title="Private note",
+            document={"version": 1, "blocks": []},
+            note_type=Note.NoteType.VIDEO,
+            video=video,
+        )
+
+        response = self.client.get(
+            f"/api/videos/{video.youtube_id}/details/",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["video"]["notes_count"], 1)
+        self.assertEqual(
+            [note["id"] for note in response.data["notes"]],
+            [own_note.pk],
+        )
+
+    def test_video_detail_hides_videos_only_associated_with_another_user(self):
+        video = Video.objects.create(youtube_id="abcdefghijk")
+        Note.objects.create(
+            user=self.other_user,
+            title="Other user's note",
+            document={"version": 1, "blocks": []},
+            note_type=Note.NoteType.VIDEO,
+            video=video,
+        )
+
+        response = self.client.get(
+            f"/api/videos/{video.youtube_id}/details/",
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_read_only_video_data_is_hidden_without_user_association(self):
+        video = Video.objects.create(
+            youtube_id="abcdefghijk",
+            transcript_status=Video.TranscriptStatus.READY,
+            transcript=[
+                {
+                    "text": "Private user's saved video data.",
+                    "start": 0,
+                    "duration": 1,
+                },
+            ],
+            analysis_status=Video.AnalysisStatus.READY,
+        )
+        VideoAnalysis.objects.create(video=video, summary="Analysis.")
+        Note.objects.create(
+            user=self.other_user,
+            title="Owner's note",
+            document={"version": 1, "blocks": []},
+            note_type=Note.NoteType.VIDEO,
+            video=video,
+        )
+
+        transcript_response = self.client.get(
+            "/api/videos/abcdefghijk/transcript/",
+        )
+        analysis_response = self.client.get(
+            "/api/videos/abcdefghijk/analyze/",
+        )
+
+        self.assertEqual(transcript_response.status_code, 404)
+        self.assertEqual(analysis_response.status_code, 404)
+
+    def test_deleting_video_note_updates_count_without_deleting_video(self):
+        video = Video.objects.create(youtube_id="abcdefghijk")
+        note = Note.objects.create(
+            user=self.user,
+            title="My note",
+            document={"version": 1, "blocks": []},
+            note_type=Note.NoteType.VIDEO,
+            video=video,
+        )
+        self.assertEqual(self.client.get("/api/videos/").data["count"], 1)
+
+        response = self.client.delete(f"/api/notes/{note.pk}/")
+
+        self.assertEqual(response.status_code, 204)
+        video.refresh_from_db()
+        self.assertEqual(video.youtube_id, "abcdefghijk")
+        result = self.client.get("/api/videos/")
+        self.assertEqual(result.data["count"], 0)
+
+
 class TranscriptEndpointTests(DjangoTestCase):
     def setUp(self):
         self.client = APIClient()

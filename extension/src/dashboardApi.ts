@@ -34,6 +34,16 @@ export interface DashboardData {
   recentNotes: DashboardNote[];
 }
 
+export function matchesDashboardNoteSearch(
+  note: Pick<DashboardNote, "title">,
+  query: string,
+): boolean {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  if (!normalizedQuery) return true;
+
+  return note.title.toLocaleLowerCase().includes(normalizedQuery);
+}
+
 export interface DashboardTranscriptSegment {
   text: string;
   start: number;
@@ -348,6 +358,31 @@ export async function createStandaloneDashboardNote(data: {
     },
   });
   return normalizeSavedNote(savedNote);
+}
+
+export async function createVideoDashboardNote(data: {
+  youtubeId: string;
+  title: string;
+  content: string;
+  document: NoteDocument;
+  folder: number | null;
+}): Promise<DashboardNote> {
+  const response = await sendNoteCommand({
+    type: "CREATE_NOTE",
+    data: {
+      youtube_id: data.youtubeId,
+      title: data.title,
+      content: data.content,
+      document: data.document,
+      note_type: "VIDEO",
+      folder: data.folder,
+      timestamp_seconds: null,
+    },
+  });
+  if (!isObject(response) || !isObject(response.note)) {
+    throw new Error("The notes API returned invalid video note data.");
+  }
+  return normalizeSavedNote(response.note);
 }
 
 function parseNotesResponse(data: unknown): DashboardNote[] {

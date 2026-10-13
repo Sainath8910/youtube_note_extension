@@ -56,10 +56,12 @@ import {
   type VideoNote,
 } from "./noteDocument";
 import {
+  createVideoDashboardNote,
   createStandaloneDashboardNote,
   deleteDashboardNote,
   getDashboardVideoContext,
   loadDashboardData,
+  matchesDashboardNoteSearch,
   removeDashboardNote,
   updateDashboardNoteFolder,
   updateDashboardNote,
@@ -105,6 +107,11 @@ import {
   requestNoteImprovement,
 } from "./noteAssistanceApi";
 import "./dashboard.css";
+import {
+  VideoDetailPage,
+  VideosLibraryPage,
+  type VideoTab,
+} from "./VideosPage";
 
 type DashboardRoute =
   | "dashboard"
@@ -115,7 +122,7 @@ type DashboardRoute =
   | "knowledge";
 
 type NoteWorkspaceLocation =
-  | { mode: "new" }
+  | { mode: "new"; youtubeId?: string }
   | { mode: "existing"; noteId: number }
   | null;
 
@@ -123,6 +130,8 @@ interface DashboardLocation {
   route: DashboardRoute;
   noteWorkspace: NoteWorkspaceLocation;
   folderId: number | null;
+  videoId: string | null;
+  videoTab: VideoTab;
 }
 
 type DashboardState =
@@ -149,9 +158,8 @@ const routeContent: Record<
 > = {
   videos: {
     title: "Videos",
-    description: "Return to the videos connected to your learning.",
-    message:
-      "A video library endpoint is not available yet. Video-linked notes remain accessible in Notes and on their YouTube pages.",
+    description: "Browse your saved YouTube videos and learning materials.",
+    message: "",
   },
   folders: {
     title: "Folders",
@@ -160,7 +168,7 @@ const routeContent: Record<
   },
   search: {
     title: "Search",
-    description: "Find folders by name across your learning space.",
+    description: "Find folders and notes by folder name or note title.",
     message: "",
   },
   knowledge: {
@@ -171,12 +179,36 @@ const routeContent: Record<
 };
 
 function locationFromHash(hash = window.location.hash): DashboardLocation {
-  const path = hash.replace(/^#\/?/, "").split("?")[0];
+  const [path, query = ""] = hash.replace(/^#\/?/, "").split("?", 2);
+  const searchParams = new URLSearchParams(query);
+  const videoMatch = path.match(/^videos\/([A-Za-z0-9_-]{11})$/);
+  if (videoMatch) {
+    const requestedTab = searchParams.get("tab");
+    return {
+      route: "videos",
+      noteWorkspace: null,
+      folderId: null,
+      videoId: videoMatch[1],
+      videoTab:
+        requestedTab === "analysis" || requestedTab === "notes"
+          ? requestedTab
+          : "transcript",
+    };
+  }
+
   if (path === "notes/new") {
+    const youtubeId = searchParams.get("videoId") ?? undefined;
     return {
       route: "notes",
-      noteWorkspace: { mode: "new" },
+      noteWorkspace: {
+        mode: "new",
+        ...(youtubeId && /^[A-Za-z0-9_-]{11}$/.test(youtubeId)
+          ? { youtubeId }
+          : {}),
+      },
       folderId: null,
+      videoId: null,
+      videoTab: "transcript",
     };
   }
 
@@ -188,6 +220,8 @@ function locationFromHash(hash = window.location.hash): DashboardLocation {
         route: "notes",
         noteWorkspace: { mode: "existing", noteId },
         folderId: null,
+        videoId: null,
+        videoTab: "transcript",
       };
     }
   }
@@ -200,6 +234,8 @@ function locationFromHash(hash = window.location.hash): DashboardLocation {
         route: "folders",
         noteWorkspace: null,
         folderId,
+        videoId: null,
+        videoTab: "transcript",
       };
     }
   }
@@ -210,6 +246,8 @@ function locationFromHash(hash = window.location.hash): DashboardLocation {
       : "dashboard",
     noteWorkspace: null,
     folderId: null,
+    videoId: null,
+    videoTab: "transcript",
   };
 }
 
@@ -218,7 +256,8 @@ function isKnownDashboardHash(hash: string): boolean {
   return (
     navigation.some((item) => item.route === path) ||
     /^notes\/(?:new|\d+)$/.test(path) ||
-    /^folders\/\d+$/.test(path)
+    /^folders\/\d+$/.test(path) ||
+    /^videos\/[A-Za-z0-9_-]{11}$/.test(path)
   );
 }
 
@@ -504,7 +543,11 @@ function Dashboard({
                 }
               : current,
           );
-          window.location.hash = "#/notes";
+          const returnHash = noteWorkspaceBackHashRef.current;
+          window.location.hash =
+            returnHash && /^#\/videos\/[A-Za-z0-9_-]{11}/.test(returnHash)
+              ? returnHash
+              : "#/notes";
         }}
       />
     );
@@ -600,10 +643,42 @@ function Dashboard({
                 }}
               />
             )
+          ) : route === "videos" ? (
+            location.videoId ? (
+              <VideoDetailPage
+                key={location.videoId}
+                youtubeId={location.videoId}
+                activeTab={location.videoTab}
+                onBack={() => {
+                  window.location.hash = "#/videos";
+                }}
+                onTabChange={(tab) => {
+                  window.location.hash = `#/videos/${location.videoId}?tab=${tab}`;
+                }}
+                onOpenNote={(noteId) => {
+                  window.location.hash = `#/notes/${noteId}`;
+                }}
+                onCreateNote={(youtubeId) => {
+                  window.location.hash = `#/notes/new?videoId=${encodeURIComponent(youtubeId)}`;
+                }}
+              />
+            ) : (
+              <VideosLibraryPage
+                onOpenVideo={(youtubeId) => {
+                  window.location.hash = `#/videos/${encodeURIComponent(youtubeId)}`;
+                }}
+              />
+            )
           ) : route === "knowledge" ? (
             <DashboardKnowledgeWorkspace dashboardState={dashboardState} />
           ) : route === "search" ? (
-            <FolderSearchPage />
+            <FolderSearchPage
+              dashboardState={dashboardState}
+              onRetryNotes={refreshDashboard}
+              onOpenNote={(noteId) => {
+                window.location.hash = `#/notes/${noteId}`;
+              }}
+            />
           ) : (
             <WorkspacePlaceholder route={route} />
           )}
@@ -2640,12 +2715,20 @@ function NoteWorkspace({
       let savedNote: DashboardNote;
       const content = documentToPlainText(noteDocument);
       if (isNew) {
-        savedNote = await createStandaloneDashboardNote({
-          title: normalizedTitle,
-          content,
-          document: noteDocument,
-          folder: newNoteFolder?.id ?? null,
-        });
+        savedNote = location.youtubeId
+          ? await createVideoDashboardNote({
+              youtubeId: location.youtubeId,
+              title: normalizedTitle,
+              content,
+              document: noteDocument,
+              folder: newNoteFolder?.id ?? null,
+            })
+          : await createStandaloneDashboardNote({
+              title: normalizedTitle,
+              content,
+              document: noteDocument,
+              folder: newNoteFolder?.id ?? null,
+            });
       } else {
         if (!note) return;
         savedNote = await updateDashboardNote(note.id, {
@@ -2695,7 +2778,11 @@ function NoteWorkspace({
   };
 
   const pageHeading =
-    isNew ? "New standalone note" : note?.title || "Note workspace";
+    isNew
+      ? location.youtubeId
+        ? "New video note"
+        : "New standalone note"
+      : note?.title || "Note workspace";
   const updatedDate = note ? formatNoteDate(note.updated_at) : null;
   const createdDate = note ? formatNoteDate(note.created_at) : null;
   const videoUrl = getYoutubeWatchUrl(videoMetadata?.youtube_id);
@@ -4979,7 +5066,15 @@ type FolderSearchState =
   | { query: string; status: "loaded"; results: DashboardFolderSearchResult[] }
   | { query: string; status: "error"; message: string };
 
-function FolderSearchPage() {
+function FolderSearchPage({
+  dashboardState,
+  onRetryNotes,
+  onOpenNote,
+}: {
+  dashboardState: DashboardState;
+  onRetryNotes: () => void;
+  onOpenNote: (noteId: number) => void;
+}) {
   const [query, setQuery] = useState("");
   const [retryCount, setRetryCount] = useState(0);
   const [searchState, setSearchState] = useState<FolderSearchState>({
@@ -5030,18 +5125,24 @@ function FolderSearchPage() {
       : searchState.query === normalizedQuery
         ? searchState
         : { query: normalizedQuery, status: "loading" as const };
+  const matchingNotes =
+    dashboardState.status === "ready"
+      ? dashboardState.data.notes.filter((note) =>
+          matchesDashboardNoteSearch(note, normalizedQuery),
+        )
+      : [];
 
   return (
     <section className="content-card folder-search-panel">
       <label className="folder-search-input">
-        <span className="visually-hidden">Search folders</span>
+        <span className="visually-hidden">Search folders and notes</span>
         <Search size={17} aria-hidden="true" />
         <input
           type="search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search folders..."
-          aria-label="Search folders"
+          placeholder="Search folders and notes..."
+          aria-label="Search folders and notes"
         />
       </label>
 
@@ -5049,86 +5150,128 @@ function FolderSearchPage() {
         <div className="folder-search-message" role="status">
           <Folder size={20} aria-hidden="true" />
           <div>
-            <strong>Search your folders</strong>
-            <p>Enter a folder name to search.</p>
-          </div>
-        </div>
-      ) : currentSearchState.status === "loading" ? (
-        <div className="folder-search-message" role="status">
-          <span
-            className="folder-search-loading-indicator"
-            aria-hidden="true"
-          />
-          <p>Searching folders...</p>
-        </div>
-      ) : currentSearchState.status === "error" ? (
-        <div className="folder-search-message is-error" role="alert">
-          <AlertCircle size={19} aria-hidden="true" />
-          <div>
-            <strong>Folders could not be searched</strong>
-            <p>{currentSearchState.message}</p>
-            <button
-              className="inline-action"
-              type="button"
-              onClick={() => setRetryCount((count) => count + 1)}
-            >
-              Try again
-            </button>
-          </div>
-        </div>
-      ) : currentSearchState.results.length === 0 ? (
-        <div className="folder-search-message" role="status">
-          <Search size={19} aria-hidden="true" />
-          <div>
-            <strong>No matching folders</strong>
-            <p>Try another folder name.</p>
+            <strong>Search your learning space</strong>
+            <p>Enter a folder name or note title to search.</p>
           </div>
         </div>
       ) : (
-        <div className="folder-search-results">
-          <div className="folder-search-results-heading">
-            <h2>Folders</h2>
-            <span>{currentSearchState.results.length}</span>
-          </div>
-          <ul>
-            {currentSearchState.results.map((result) => (
-              <li key={result.id}>
-                <a
-                  className="folder-search-result"
-                  href={`#/folders/${result.id}`}
-                  aria-label={`Open folder: ${result.path
-                    .map((folder) => folder.name)
-                    .join(" / ")}`}
+        <>
+          {currentSearchState.status === "loading" ? (
+            <div className="folder-search-message" role="status">
+              <span
+                className="folder-search-loading-indicator"
+                aria-hidden="true"
+              />
+              <p>Searching folders...</p>
+            </div>
+          ) : currentSearchState.status === "error" ? (
+            <div className="folder-search-message is-error" role="alert">
+              <AlertCircle size={19} aria-hidden="true" />
+              <div>
+                <strong>Folders could not be searched</strong>
+                <p>{currentSearchState.message}</p>
+                <button
+                  className="inline-action"
+                  type="button"
+                  onClick={() => setRetryCount((count) => count + 1)}
                 >
-                  <Folder size={17} aria-hidden="true" />
-                  <span className="folder-search-path">
-                    {result.path.map((folder, index) => (
-                      <span
-                        className="folder-search-path-segment"
-                        key={folder.id}
-                      >
-                        {index > 0 && (
+                  Try again
+                </button>
+              </div>
+            </div>
+          ) : currentSearchState.results.length > 0 ? (
+            <div className="folder-search-results">
+              <div className="folder-search-results-heading">
+                <h2>Folders</h2>
+                <span>{currentSearchState.results.length}</span>
+              </div>
+              <ul>
+                {currentSearchState.results.map((result) => (
+                  <li key={result.id}>
+                    <a
+                      className="folder-search-result"
+                      href={`#/folders/${result.id}`}
+                      aria-label={`Open folder: ${result.path
+                        .map((folder) => folder.name)
+                        .join(" / ")}`}
+                    >
+                      <Folder size={17} aria-hidden="true" />
+                      <span className="folder-search-path">
+                        {result.path.map((folder, index) => (
                           <span
-                            className="folder-search-path-separator"
-                            aria-hidden="true"
+                            className="folder-search-path-segment"
+                            key={folder.id}
                           >
-                            /
+                            {index > 0 && (
+                              <span
+                                className="folder-search-path-separator"
+                                aria-hidden="true"
+                              >
+                                /
+                              </span>
+                            )}
+                            {folder.id === result.id ? (
+                              <strong>{folder.name}</strong>
+                            ) : (
+                              <span>{folder.name}</span>
+                            )}
                           </span>
-                        )}
-                        {folder.id === result.id ? (
-                          <strong>{folder.name}</strong>
-                        ) : (
-                          <span>{folder.name}</span>
-                        )}
+                        ))}
                       </span>
-                    ))}
-                  </span>
-                  <ArrowUpRight size={15} aria-hidden="true" />
-                </a>
-              </li>
-            ))}
-          </ul>
-        </div>
+                      <ArrowUpRight size={15} aria-hidden="true" />
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {dashboardState.status === "loading" ? (
+            <div className="folder-search-message" role="status">
+              <span
+                className="folder-search-loading-indicator"
+                aria-hidden="true"
+              />
+              <p>Loading notes...</p>
+            </div>
+          ) : dashboardState.status === "error" ? (
+            <div className="folder-search-message is-error" role="alert">
+              <AlertCircle size={19} aria-hidden="true" />
+              <div>
+                <strong>Notes could not be searched</strong>
+                <p>{dashboardState.message}</p>
+                <button
+                  className="inline-action"
+                  type="button"
+                  onClick={onRetryNotes}
+                >
+                  Try again
+                </button>
+              </div>
+            </div>
+          ) : matchingNotes.length > 0 ? (
+            <div className="folder-search-results">
+              <div className="folder-search-results-heading">
+                <h2>Notes</h2>
+                <span>{matchingNotes.length}</span>
+              </div>
+              <NoteRows notes={matchingNotes} onSelectNote={onOpenNote} />
+            </div>
+          ) : null}
+
+          {currentSearchState.status === "loaded" &&
+            currentSearchState.results.length === 0 &&
+            dashboardState.status === "ready" &&
+            matchingNotes.length === 0 && (
+              <div className="folder-search-message" role="status">
+                <Search size={19} aria-hidden="true" />
+                <div>
+                  <strong>No matching folders or notes</strong>
+                  <p>Try another folder name or note title.</p>
+                </div>
+              </div>
+            )}
+        </>
       )}
     </section>
   );

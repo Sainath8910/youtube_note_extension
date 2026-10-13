@@ -376,6 +376,44 @@ async function respondToFolderRequest(
   }
 }
 
+async function respondToVideoRequest(
+  path: string,
+  sendResponse: (response: unknown) => void,
+): Promise<void> {
+  try {
+    const response = await fetchDjangoApiWithAuth(
+      `http://localhost:8000/api/videos/${path}`,
+      { method: "GET" },
+    );
+    const responseText = await response.text();
+    let responseData: unknown = null;
+    if (responseText) {
+      try {
+        responseData = JSON.parse(responseText);
+      } catch {
+        sendResponse({
+          success: false,
+          status: response.ok ? 502 : response.status,
+          data: { detail: "The Videos service returned invalid JSON." },
+        });
+        return;
+      }
+    }
+    sendResponse({
+      success: response.ok,
+      status: response.status,
+      data: responseData,
+    });
+  } catch (error) {
+    console.error("[YouTube Knowledge] Video request failed:", error);
+    sendResponse({
+      success: false,
+      status: 0,
+      data: { detail: "Could not reach the Videos service." },
+    });
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (
     dispatchAuthRuntimeMessage(
@@ -486,6 +524,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       "GET",
       sendResponse,
     );
+    return true;
+  }
+
+  if (message.type === "LIST_VIDEOS") {
+    void respondToVideoRequest("", sendResponse);
+    return true;
+  }
+
+  if (
+    message.type === "GET_VIDEO_DETAILS" ||
+    message.type === "GET_VIDEO_TRANSCRIPT" ||
+    message.type === "GET_VIDEO_ANALYSIS"
+  ) {
+    const videoId =
+      typeof message.videoId === "string" ? message.videoId.trim() : "";
+    if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+      sendResponse({
+        success: false,
+        status: 400,
+        data: { detail: "A valid YouTube video ID is required." },
+      });
+      return;
+    }
+    const path =
+      message.type === "GET_VIDEO_DETAILS"
+        ? `${encodeURIComponent(videoId)}/details/`
+        : message.type === "GET_VIDEO_TRANSCRIPT"
+          ? `${encodeURIComponent(videoId)}/transcript/`
+          : `${encodeURIComponent(videoId)}/analyze/`;
+    void respondToVideoRequest(path, sendResponse);
     return true;
   }
 
