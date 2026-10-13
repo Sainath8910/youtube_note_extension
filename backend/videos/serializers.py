@@ -41,6 +41,8 @@ class VideoSerializer(serializers.ModelSerializer):
             "thumbnail_url",
             "duration_seconds",
             "transcript_status",
+            "transcript",
+            "transcript_language",
             "analysis_status",
             "analysis",
             "created_at",

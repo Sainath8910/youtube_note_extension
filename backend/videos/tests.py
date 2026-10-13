@@ -208,6 +208,8 @@ class VideoContextEndpointTests(DjangoTestCase):
         video = Video.objects.create(
             youtube_id="abcdefghijk",
             title="Example video",
+            transcript=[{"text": "Saved transcript.", "start": 0, "duration": 2}],
+            transcript_language="en",
         )
 
         response = self.client.get(self.url)
@@ -217,6 +219,14 @@ class VideoContextEndpointTests(DjangoTestCase):
         self.assertEqual(response.data["video"]["id"], video.pk)
         self.assertEqual(response.data["video"]["youtube_id"], video.youtube_id)
         self.assertEqual(response.data["video"]["title"], video.title)
+        self.assertEqual(
+            response.data["video"]["transcript"],
+            video.transcript,
+        )
+        self.assertEqual(
+            response.data["video"]["transcript_language"],
+            video.transcript_language,
+        )
         self.assertIsNone(response.data["video"]["analysis"])
         self.assertEqual(response.data["notes"], [])
 

@@ -4,8 +4,10 @@ import {
   useState,
   type FormEvent,
   type Ref,
+  type ReactNode,
 } from "react";
 import {
+  BadgeCheck,
   AlertCircle,
   ArrowLeft,
   ArrowUpRight,
@@ -13,9 +15,15 @@ import {
   BookOpen,
   Clapperboard,
   Check,
+  ChevronDown,
+  ChevronRight,
+  CircleHelp,
   Clock3,
+  Download,
   ExternalLink,
   FileText,
+  FileCode2,
+  GraduationCap,
   Folder,
   House,
   Menu,
@@ -25,6 +33,11 @@ import {
   Search,
   Save,
   Sparkles,
+  Lightbulb,
+  ListChecks,
+  Route,
+  Tags,
+  Trash2,
   Video,
   X,
 } from "lucide-react";
@@ -43,13 +56,17 @@ import {
 } from "./noteDocument";
 import {
   createStandaloneDashboardNote,
+  deleteDashboardNote,
+  getDashboardVideoContext,
   loadDashboardData,
+  removeDashboardNote,
   updateDashboardNoteFolder,
   updateDashboardNote,
   upsertDashboardNote,
   type DashboardData,
   type DashboardFolderPathItem,
   type DashboardNote,
+  type DashboardVideoContext as DashboardVideoDetails,
 } from "./dashboardApi";
 import {
   createDashboardFolder,
@@ -441,6 +458,19 @@ function Dashboard() {
               : current,
           );
           if (dashboardState.status === "error") refreshDashboard();
+        }}
+        onDeleted={(noteId) => {
+          savedNoteOverridesRef.current.delete(noteId);
+          unsavedChangesRef.current = false;
+          setDashboardState((current) =>
+            current.status === "ready"
+              ? {
+                  status: "ready",
+                  data: removeDashboardNote(current.data, noteId),
+                }
+              : current,
+          );
+          window.location.hash = "#/notes";
         }}
       />
     );
@@ -975,12 +1005,32 @@ function NotesPage({
   onSortOrderChange: (value: NoteSortOrder) => void;
   onOpenNote: (noteId: number) => void;
 }) {
+  const [currentPage, setCurrentPage] = useState(1);
   const allNotes =
     dashboardState.status === "ready" ? dashboardState.data.notes : [];
   const matchingNotes = allNotes
     .filter((note) => noteType === "ALL" || note.note_type === noteType)
     .filter((note) => matchesNoteSearch(note, searchQuery))
     .sort((left, right) => compareNotes(left, right, sortOrder));
+  const totalPages = Math.max(
+    1,
+    Math.ceil(matchingNotes.length / NOTES_PAGE_SIZE),
+  );
+  const page = Math.min(currentPage, totalPages);
+  const pageNotes = matchingNotes.slice(
+    (page - 1) * NOTES_PAGE_SIZE,
+    page * NOTES_PAGE_SIZE,
+  );
+  const pageNumbers = Array.from(
+    { length: Math.min(3, totalPages) },
+    (_, index) => {
+      const firstVisiblePage = Math.max(
+        1,
+        Math.min(page - 1, totalPages - 2),
+      );
+      return firstVisiblePage + index;
+    },
+  );
   const hasNotes =
     dashboardState.status === "ready" &&
     dashboardState.data.totalNotes > 0;
@@ -1032,7 +1082,10 @@ function NotesPage({
               <input
                 type="search"
                 value={searchQuery}
-                onChange={(event) => onSearchQueryChange(event.target.value)}
+                onChange={(event) => {
+                  setCurrentPage(1);
+                  onSearchQueryChange(event.target.value);
+                }}
                 aria-label="Search notes"
                 placeholder="Search titles and note text"
               />
@@ -1043,7 +1096,10 @@ function NotesPage({
                 value={noteType}
                 onChange={(event) => {
                   const value = event.target.value;
-                  if (isNoteTypeFilter(value)) onNoteTypeChange(value);
+                  if (isNoteTypeFilter(value)) {
+                    setCurrentPage(1);
+                    onNoteTypeChange(value);
+                  }
                 }}
               >
                 <option value="ALL">All Notes</option>
@@ -1057,7 +1113,10 @@ function NotesPage({
                 value={sortOrder}
                 onChange={(event) => {
                   const value = event.target.value;
-                  if (isNoteSortOrder(value)) onSortOrderChange(value);
+                  if (isNoteSortOrder(value)) {
+                    setCurrentPage(1);
+                    onSortOrderChange(value);
+                  }
                 }}
               >
                 <option value="updated-desc">Recently Updated</option>
@@ -1080,13 +1139,63 @@ function NotesPage({
               <p>No matching notes. Try changing your search or note type.</p>
             </div>
           ) : (
-            <NotesListState
-              dashboardState={dashboardState}
-              notes={matchingNotes}
-              onRetry={onRetry}
-              onViewNotes={onRetry}
-              onSelectNote={onOpenNote}
-            />
+            <>
+              <NotesListState
+                dashboardState={dashboardState}
+                notes={pageNotes}
+                onRetry={onRetry}
+                onViewNotes={onRetry}
+                onSelectNote={onOpenNote}
+              />
+              {totalPages > 1 && (
+                <nav
+                  className="notes-pagination"
+                  aria-label="Notes pages"
+                >
+                  <span className="notes-pagination-summary">
+                    Showing {(page - 1) * NOTES_PAGE_SIZE + 1}–
+                    {Math.min(page * NOTES_PAGE_SIZE, matchingNotes.length)} of{" "}
+                    {matchingNotes.length}
+                  </span>
+                  <div className="notes-pagination-controls">
+                    <button
+                      type="button"
+                      className="notes-page-button notes-page-step"
+                      disabled={page === 1}
+                      onClick={() =>
+                        setCurrentPage((value) => Math.max(1, value - 1))
+                      }
+                    >
+                      Prev
+                    </button>
+                    {pageNumbers.map((pageNumber) => (
+                      <button
+                        type="button"
+                        key={pageNumber}
+                        className={`notes-page-button${pageNumber === page ? " is-current" : ""}`}
+                        aria-label={`Page ${pageNumber}`}
+                        aria-current={pageNumber === page ? "page" : undefined}
+                        onClick={() => setCurrentPage(pageNumber)}
+                      >
+                        {pageNumber}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className="notes-page-button notes-page-step"
+                      disabled={page === totalPages}
+                      onClick={() =>
+                        setCurrentPage((value) =>
+                          Math.min(totalPages, value + 1),
+                        )
+                      }
+                    >
+                      Next
+                    </button>
+                  </div>
+                </nav>
+              )}
+            </>
           )}
         </>
       ) : (
@@ -1107,6 +1216,7 @@ type NoteSortOrder =
   | "updated-asc"
   | "created-asc";
 type NoteTypeFilter = "ALL" | "VIDEO" | "STANDALONE";
+const NOTES_PAGE_SIZE = 10;
 
 function isNoteSortOrder(value: string): value is NoteSortOrder {
   return (
@@ -1220,7 +1330,7 @@ function structuredDocumentText(note: VideoNote): string {
     .join("\n");
 }
 
-type NoteWorkspaceMode = "read" | "write";
+type NoteWorkspaceMode = "read" | "write" | "transcript" | "analysis";
 
 interface NoteImprovementProposal {
   baseUpdatedAt: string;
@@ -1228,6 +1338,11 @@ interface NoteImprovementProposal {
   originalType: NoteBlock["type"];
   suggestedContent: string;
 }
+
+type DashboardVideoContextState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; data: DashboardVideoDetails };
 
 const dashboardNoteColors: ThemeColors = {
   panel: "#0b1220",
@@ -1251,6 +1366,808 @@ interface NoteWorkspaceProps {
   onDirtyChange: (dirty: boolean) => void;
   onSaved: (note: DashboardNote) => void;
   onFolderUpdated: (note: DashboardNote) => void;
+  onDeleted: (noteId: number) => void;
+}
+
+function noteExportFileName(title: string, extension: "html" | "pdf"): string {
+  const safeTitle = title
+    .trim()
+    .replace(/[<>:"/\\|?*]/g, "-")
+    .replace(/[. ]+$/g, "")
+    .slice(0, 120);
+  return `${safeTitle || "youtube-knowledge-note"}.${extension}`;
+}
+
+function noteExportBlocks(note: DashboardNote): NoteBlock[] {
+  const blocks = normalizeDocument(note).blocks.filter(
+    (block) =>
+      block.content.trim() || block.type === "image" || block.type === "screenshot",
+  );
+  if (blocks.length > 0) return blocks;
+  return note.content.trim()
+    ? [{ id: "legacy-content", type: "paragraph", content: note.content }]
+    : [];
+}
+
+function noteBlockUrl(block: NoteBlock): string | null {
+  const value =
+    block.type === "url"
+      ? block.content.trim() || block.metadata?.url || ""
+      : block.content.trim();
+  return safeExternalHttpUrl(value);
+}
+
+function noteBlockImage(block: NoteBlock): string {
+  const metadataImage =
+    typeof block.metadata?.image === "string" ? block.metadata.image : "";
+  return block.type === "screenshot"
+    ? metadataImage || block.content
+    : block.content || metadataImage;
+}
+
+function noteBlockImageLink(block: NoteBlock): string | null {
+  const metadataUrl =
+    typeof block.metadata?.url === "string"
+      ? safeExternalHttpUrl(block.metadata.url)
+      : null;
+  const image = safeNoteImageUrl(noteBlockImage(block));
+  return metadataUrl ?? (image && /^https?:\/\//i.test(image) ? image : null);
+}
+
+function noteBlockTimestamp(block: NoteBlock): number | null {
+  const value =
+    block.type === "screenshot"
+      ? block.metadata?.timestamp_seconds
+      : block.type === "timestamp"
+        ? block.content
+        : null;
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+  }
+  if (typeof value !== "string") return null;
+
+  const parts = value.split(":").map(Number);
+  if (
+    (parts.length !== 2 && parts.length !== 3) ||
+    parts.some((part) => !Number.isFinite(part) || part < 0) ||
+    parts.at(-1)! >= 60 ||
+    (parts.length === 3 && parts[1] >= 60)
+  ) {
+    return null;
+  }
+  return parts.length === 3
+    ? Math.floor(parts[0] * 3600 + parts[1] * 60 + parts[2])
+    : Math.floor(parts[0] * 60 + parts[1]);
+}
+
+function noteBlockTimestampUrl(
+  block: NoteBlock,
+  youtubeId?: string,
+): string | null {
+  const timestamp = noteBlockTimestamp(block);
+  return timestamp === null ? null : getYoutubeWatchUrl(youtubeId, timestamp);
+}
+
+function downloadNoteAsHtml(note: DashboardNote): void {
+  const escapeHtml = (value: string) =>
+    value.replace(/[&<>"']/g, (character) => {
+      const entities: Record<string, string> = {
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      };
+      return entities[character] ?? character;
+    });
+  const title = note.title.trim() || "Untitled note";
+  const youtubeId = note.video_detail?.youtube_id;
+  const blocks = noteExportBlocks(note).map((block) => {
+    const timestamp = noteBlockTimestamp(block);
+    const timestampUrl = noteBlockTimestampUrl(block, youtubeId);
+    if (block.type === "heading") {
+      const level =
+        typeof block.metadata?.level === "number" &&
+        block.metadata.level >= 1 &&
+        block.metadata.level <= 6
+          ? Math.floor(block.metadata.level)
+          : 2;
+      return `<h${level}>${escapeHtml(block.content)}</h${level}>`;
+    }
+    if (block.type === "code" || block.type === "command") {
+      const language =
+        block.type === "code"
+          ? block.metadata?.language || "code"
+          : block.metadata?.shell || "command";
+      return `<figure class="code-block"><figcaption>${escapeHtml(block.type === "code" ? "Code" : "Command")} · ${escapeHtml(String(language))}</figcaption><pre><code>${escapeHtml(block.content)}</code></pre></figure>`;
+    }
+    if (block.type === "bullet_list" || block.type === "numbered_list") {
+      const tag = block.type === "bullet_list" ? "ul" : "ol";
+      const items = getListItems(block.content)
+        .map((item) => `<li>${escapeHtml(item)}</li>`)
+        .join("");
+      return `<${tag}>${items}</${tag}>`;
+    }
+    if (block.type === "url") {
+      const url = noteBlockUrl(block);
+      const label =
+        block.metadata?.title || block.metadata?.domain || url || "Web resource";
+      const description =
+        typeof block.metadata?.description === "string"
+          ? `<p>${escapeHtml(block.metadata.description)}</p>`
+          : "";
+      return `<article class="resource-card"><strong>${escapeHtml(label)}</strong>${description}${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>` : ""}</article>`;
+    }
+    if (block.type === "image" || block.type === "screenshot") {
+      const image = safeNoteImageUrl(noteBlockImage(block));
+      const alt =
+        block.type === "image"
+          ? block.metadata?.alt || "Note image"
+          : timestamp !== null
+            ? `Video screenshot at ${formatTimestamp(timestamp)}`
+            : "Video screenshot";
+      const caption =
+        block.type === "image"
+          ? block.metadata?.alt || ""
+          : timestamp !== null
+            ? `Captured at ${formatTimestamp(timestamp)}`
+            : "";
+      const imageMarkup = image
+        ? `<img src="${escapeHtml(image)}" alt="${escapeHtml(alt)}" loading="lazy">`
+        : `<p class="missing-image">${escapeHtml(alt)} (image unavailable)</p>`;
+      const imageLink = noteBlockImageLink(block);
+      const linkedImage =
+        imageLink
+          ? `<a href="${escapeHtml(imageLink)}" target="_blank" rel="noopener noreferrer">${imageMarkup}</a>`
+          : imageMarkup;
+      const timestampLink =
+        timestampUrl && timestamp !== null
+          ? `<a class="timestamp-link" href="${escapeHtml(timestampUrl)}" target="_blank" rel="noopener noreferrer">Open video at ${formatTimestamp(timestamp)}</a>`
+          : caption
+            ? `<span>${escapeHtml(caption)}</span>`
+            : "";
+      return `<figure class="note-image">${linkedImage}${caption && block.type === "image" ? `<figcaption>${escapeHtml(caption)}</figcaption>` : ""}${timestampLink ? `<figcaption>${timestampLink}</figcaption>` : ""}</figure>`;
+    }
+    if (block.type === "timestamp") {
+      return timestampUrl && timestamp !== null
+        ? `<p class="note-timestamp"><a href="${escapeHtml(timestampUrl)}" target="_blank" rel="noopener noreferrer">▶ ${escapeHtml(block.content)} · Open video</a></p>`
+        : `<p class="note-timestamp">▶ ${escapeHtml(block.content)}</p>`;
+    }
+    if (block.type === "equation") {
+      return `<pre class="equation">${escapeHtml(block.content)}</pre>`;
+    }
+    return `<p>${escapeHtml(block.content).replace(/\r?\n/g, "<br>")}</p>`;
+  });
+  const content =
+    blocks.filter(Boolean).join("\n") ||
+    `<p>${escapeHtml(note.content || "This note has no text content.")}</p>`;
+  const videoUrl = getYoutubeWatchUrl(youtubeId);
+  const videoLink = videoUrl
+    ? `<p class="video-link"><a href="${escapeHtml(videoUrl)}" target="_blank" rel="noopener noreferrer">Open related YouTube video</a></p>`
+    : "";
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    :root { color-scheme: light; }
+    body { max-width: 820px; margin: 42px auto; padding: 0 26px 48px; color: #17202a; background: #fff; font: 15px/1.7 system-ui, sans-serif; }
+    header { margin-bottom: 30px; padding-bottom: 18px; border-bottom: 2px solid #dbe4ec; }
+    h1 { margin: 0; font-size: 30px; line-height: 1.25; overflow-wrap: anywhere; }
+    h2, h3, h4 { margin: 24px 0 8px; line-height: 1.35; }
+    p { margin: 12px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    ul, ol { padding-left: 26px; }
+    li { margin: 5px 0; }
+    a { color: #075985; overflow-wrap: anywhere; }
+    img { display: block; max-width: 100%; max-height: 680px; object-fit: contain; border-radius: 6px; }
+    figure { margin: 20px 0; }
+    figcaption { margin-top: 7px; color: #526273; font-size: 13px; }
+    .code-block, .resource-card { padding: 14px 16px; border: 1px solid #d4dee8; border-radius: 8px; background: #f5f8fb; }
+    .code-block figcaption { margin: 0 0 9px; font-weight: 650; text-transform: capitalize; }
+    .code-block pre, .equation { overflow-x: auto; margin: 0; padding: 13px; border-radius: 6px; color: #e2e8f0; background: #111827; font: 13px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .resource-card strong { display: block; margin-bottom: 4px; }
+    .resource-card p { margin: 4px 0; }
+    .resource-card a { display: block; margin-top: 8px; }
+    .note-timestamp { display: inline-block; padding: 5px 9px; border: 1px solid #b7d9e6; border-radius: 6px; background: #effaff; }
+    .missing-image { padding: 14px; border: 1px dashed #9aa9b8; border-radius: 6px; }
+    @media print { body { margin: 0 auto; } a { color: #075985; } figure, .code-block, .resource-card { break-inside: avoid; } }
+  </style>
+</head>
+<body><main><header><h1>${escapeHtml(title)}</h1>${videoLink}</header><article>${content}</article></main></body>
+</html>`;
+  const blobUrl = URL.createObjectURL(
+    new Blob([html], { type: "text/html;charset=utf-8" }),
+  );
+  const link = document.createElement("a");
+  link.href = blobUrl;
+  link.download = noteExportFileName(title, "html");
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+}
+
+async function downloadNoteAsPdf(note: DashboardNote): Promise<void> {
+  const { jsPDF } = await import("jspdf");
+  const pdf = new jsPDF({ unit: "pt", format: "a4" });
+  const margin = 48;
+  const bottomMargin = 52;
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const maxWidth = pdf.internal.pageSize.getWidth() - margin * 2;
+  const youtubeId = note.video_detail?.youtube_id;
+  let y = margin;
+
+  const ensureSpace = (height: number) => {
+    if (y + height > pageHeight - bottomMargin) {
+      pdf.addPage();
+      y = margin;
+    }
+  };
+  const addText = (
+    text: string,
+    options: {
+      size?: number;
+      font?: "helvetica" | "courier" | "times";
+      style?: "normal" | "bold" | "italic";
+      color?: [number, number, number];
+      indent?: number;
+      lineHeight?: number;
+    } = {},
+  ) => {
+    if (!text) return;
+    const {
+      size = 11,
+      font = "helvetica",
+      style = "normal",
+      color = [35, 45, 58],
+      indent = 0,
+      lineHeight = size * 1.5,
+    } = options;
+    pdf.setFont(font, style);
+    pdf.setFontSize(size);
+    pdf.setTextColor(...color);
+    const lines = pdf.splitTextToSize(text, maxWidth - indent);
+    ensureSpace(lines.length * lineHeight + 3);
+    pdf.text(lines, margin + indent, y);
+    y += lines.length * lineHeight + 5;
+  };
+  const addLink = (label: string, url: string) => {
+    if (!label || !url) return;
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(10);
+    pdf.setTextColor(8, 105, 145);
+    const lines = pdf.splitTextToSize(label, maxWidth);
+    ensureSpace(lines.length * 15 + 4);
+    for (const line of lines) {
+      pdf.textWithLink(line, margin, y, { url });
+      y += 15;
+    }
+    y += 4;
+  };
+  const addSectionLabel = (label: string) => {
+    y += 5;
+    addText(label, { size: 9, style: "bold", color: [92, 106, 122] });
+  };
+  const addImage = (image: string, caption: string, linkUrl?: string | null) => {
+    if (/^data:image\/(?:png|jpe?g);base64,/i.test(image)) {
+      const properties = pdf.getImageProperties(image);
+      const maxImageWidth = Math.min(maxWidth, 440);
+      const maxImageHeight = 330;
+      const scale = Math.min(
+      maxImageWidth / properties.width,
+      maxImageHeight / properties.height,
+      1,
+      );
+      const width = properties.width * scale;
+      const height = properties.height * scale;
+      ensureSpace(height + 24);
+      pdf.addImage(
+        image,
+        properties.fileType,
+        margin,
+        y,
+        width,
+        height,
+      );
+      if (linkUrl) pdf.link(margin, y, width, height, { url: linkUrl });
+      y += height + 5;
+      if (caption) addText(caption, { size: 9, color: [92, 106, 122] });
+      return;
+    }
+    if (linkUrl) addLink(caption || "Open image", linkUrl);
+    else addText(caption || "Image unavailable", { size: 10 });
+  };
+
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(22);
+  pdf.setTextColor(24, 37, 52);
+  const titleLines = pdf.splitTextToSize(
+    note.title.trim() || "Untitled note",
+    maxWidth,
+  );
+  ensureSpace(titleLines.length * 27 + 18);
+  pdf.text(titleLines, margin, y);
+  y += titleLines.length * 27 + 9;
+  pdf.setDrawColor(211, 222, 232);
+  pdf.line(margin, y, pageWidth - margin, y);
+  y += 18;
+
+  const videoUrl = getYoutubeWatchUrl(youtubeId);
+  if (videoUrl) addLink("Open related YouTube video", videoUrl);
+
+  const exportBlocks = noteExportBlocks(note);
+  if (!exportBlocks.length) addText("This note has no text content.", { color: [92, 106, 122] });
+  for (const block of exportBlocks) {
+    if (!block.content.trim() && block.type !== "image" && block.type !== "screenshot") {
+      continue;
+    }
+    switch (block.type) {
+      case "heading":
+        y += 5;
+        addText(block.content, { size: 15, style: "bold", color: [24, 37, 52] });
+        break;
+      case "code":
+      case "command": {
+        const label =
+          block.type === "code"
+            ? `CODE${block.metadata?.language ? ` · ${block.metadata.language}` : ""}`
+            : `COMMAND${block.metadata?.shell ? ` · ${block.metadata.shell}` : ""}`;
+        addSectionLabel(label);
+        pdf.setFont("courier", "normal");
+        pdf.setFontSize(9);
+        const codeLines = pdf.splitTextToSize(block.content, maxWidth - 24);
+        const lineHeight = 13;
+        let index = 0;
+        while (index < codeLines.length) {
+          let linesOnPage = Math.floor(
+            (pageHeight - bottomMargin - y - 2) / lineHeight,
+          );
+          if (linesOnPage < 1) {
+            pdf.addPage();
+            y = margin;
+            linesOnPage = Math.floor(
+              (pageHeight - bottomMargin - y - 2) / lineHeight,
+            );
+          }
+          linesOnPage = Math.min(linesOnPage, codeLines.length - index);
+          const blockHeight = linesOnPage * lineHeight + 12;
+          pdf.setFillColor(244, 247, 250);
+          pdf.setDrawColor(216, 225, 234);
+          pdf.roundedRect(
+            margin,
+            y - 10,
+            maxWidth,
+            blockHeight,
+            4,
+            4,
+            "FD",
+          );
+          pdf.setTextColor(34, 45, 58);
+          for (let line = 0; line < linesOnPage; line += 1) {
+            pdf.text(codeLines[index + line], margin + 12, y + line * lineHeight);
+          }
+          index += linesOnPage;
+          y += blockHeight + 8;
+        }
+        break;
+      }
+      case "bullet_list":
+      case "numbered_list": {
+        const items = getListItems(block.content);
+        items.forEach((item, index) => {
+          const marker =
+            block.type === "bullet_list" ? "- " : `${index + 1}. `;
+          addText(`${marker}${item}`, { indent: 6, lineHeight: 16 });
+        });
+        break;
+      }
+      case "url": {
+        const url = noteBlockUrl(block);
+        const label =
+          (typeof block.metadata?.title === "string" &&
+            block.metadata.title.trim()) ||
+          (typeof block.metadata?.domain === "string" &&
+            block.metadata.domain.trim()) ||
+          "Web resource";
+        addSectionLabel(label);
+        if (
+          typeof block.metadata?.description === "string" &&
+          block.metadata.description.trim()
+        ) {
+          addText(block.metadata.description);
+        }
+        if (url) addLink(url, url);
+        else addText(block.content);
+        break;
+      }
+      case "image":
+      case "screenshot": {
+        const image = safeNoteImageUrl(noteBlockImage(block));
+        const timestamp = noteBlockTimestamp(block);
+        const caption =
+          block.type === "image"
+            ? block.metadata?.alt || "Note image"
+            : timestamp !== null
+              ? `Video screenshot at ${formatTimestamp(timestamp)}`
+              : "Video screenshot";
+        const imageLink = noteBlockImageLink(block);
+        addImage(image || "", caption, imageLink);
+        const timestampUrl = noteBlockTimestampUrl(block, youtubeId);
+        if (timestampUrl && timestamp !== null) {
+          addLink(`Open video at ${formatTimestamp(timestamp)}`, timestampUrl);
+        }
+        break;
+      }
+      case "timestamp": {
+        const timestamp = noteBlockTimestamp(block);
+        const timestampUrl = noteBlockTimestampUrl(block, youtubeId);
+        if (timestamp !== null && timestampUrl) {
+          addLink(`▶ ${block.content} · Open video`, timestampUrl);
+        } else {
+          addText(`▶ ${block.content}`, { style: "bold", color: [8, 105, 145] });
+        }
+        break;
+      }
+      case "equation":
+        addText(block.content, {
+          font: "times",
+          style: "italic",
+          size: 13,
+          color: [39, 54, 72],
+        });
+        break;
+      default:
+        addText(block.content);
+    }
+  }
+  pdf.save(noteExportFileName(note.title, "pdf"));
+}
+
+function analysisValueText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return "";
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function analysisStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is string =>
+          typeof item === "string" && item.trim().length > 0,
+      )
+    : [];
+}
+
+function analysisNoteSections(
+  value: unknown,
+): Array<{ heading: string; content: string }> {
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is { heading: string; content: string } =>
+          isPlainObject(item) &&
+          typeof item.heading === "string" &&
+          item.heading.trim().length > 0 &&
+          typeof item.content === "string" &&
+          item.content.trim().length > 0,
+      )
+    : [];
+}
+
+function DashboardAnalysisCard({
+  title,
+  icon,
+  expanded,
+  onToggle,
+  children,
+}: {
+  title: string;
+  icon: ReactNode;
+  expanded: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <section className="dashboard-analysis-card">
+      <button
+        className="dashboard-analysis-card-heading"
+        type="button"
+        aria-expanded={expanded}
+        onClick={onToggle}
+      >
+        <span className="dashboard-analysis-card-icon" aria-hidden="true">
+          {icon}
+        </span>
+        <span>{title}</span>
+        {expanded ? (
+          <ChevronDown size={15} aria-hidden="true" />
+        ) : (
+          <ChevronRight size={15} aria-hidden="true" />
+        )}
+      </button>
+      {expanded && <div className="dashboard-analysis-card-content">{children}</div>}
+    </section>
+  );
+}
+
+function VideoTranscriptPanel({
+  state,
+}: {
+  state: DashboardVideoContextState;
+}) {
+  if (state.status === "loading") {
+    return <p className="video-context-status">Loading the saved transcript…</p>;
+  }
+  if (state.status === "error") {
+    return <p className="video-context-status is-error">{state.message}</p>;
+  }
+  if (!state.data.transcript?.length) {
+    return (
+      <p className="video-context-status">
+        {state.data.transcriptStatus === "READY"
+          ? "No transcript content is available for this video."
+          : `No saved transcript is available (status: ${state.data.transcriptStatus.toLowerCase()}).`}
+      </p>
+    );
+  }
+
+  return (
+    <section className="video-transcript-panel" aria-label="Video transcript">
+      <p className="video-context-meta">
+        {state.data.transcriptLanguage
+          ? `Language: ${state.data.transcriptLanguage}`
+          : `${state.data.transcript.length} transcript segments`}
+      </p>
+      <ol className="video-transcript-list">
+        {state.data.transcript.map((segment, index) => (
+          <li key={`${segment.start}-${index}`}>
+            <time>{formatTimestamp(Math.floor(segment.start))}</time>
+            <p>{segment.text}</p>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function VideoAnalysisPanel({
+  state,
+  youtubeId,
+}: {
+  state: DashboardVideoContextState;
+  youtubeId?: string;
+}) {
+  const [analysisExpandedSections, setAnalysisExpandedSections] = useState(
+    () => new Set(["summary"]),
+  );
+  const toggleAnalysisSection = (sectionId: string) => {
+    setAnalysisExpandedSections((current) => {
+      const next = new Set(current);
+      if (next.has(sectionId)) {
+        next.delete(sectionId);
+      } else {
+        next.add(sectionId);
+      }
+      return next;
+    });
+  };
+
+  if (state.status === "loading") {
+    return <p className="video-context-status">Loading the saved analysis…</p>;
+  }
+  if (state.status === "error") {
+    return <p className="video-context-status is-error">{state.message}</p>;
+  }
+  if (!state.data.analysis) {
+    return (
+      <p className="video-context-status">
+        No saved analysis is available (status: {state.data.analysisStatus.toLowerCase()}).
+      </p>
+    );
+  }
+
+  const analysis = state.data.analysis;
+  const detailedNotes = isPlainObject(analysis.detailed_notes)
+    ? analysis.detailed_notes
+    : {};
+  const noteSections = analysisNoteSections(detailedNotes.sections);
+  const definitions = analysisStringList(detailedNotes.definitions);
+  const examples = analysisStringList(detailedNotes.examples);
+  const topics = analysisStringList(analysis.topics);
+  const concepts = analysisStringList(analysis.concepts);
+  const prerequisites = analysisStringList(analysis.prerequisites);
+  const upcomingTopics = analysisStringList(analysis.upcoming_topics);
+  const questions = analysisStringList(analysis.questions);
+  const timestampItems = (value: unknown) =>
+    Array.isArray(value)
+      ? value.filter(
+          (item): item is { text: string; start: number } =>
+            isPlainObject(item) &&
+            typeof item.text === "string" &&
+            item.text.trim().length > 0 &&
+            typeof item.start === "number" &&
+            Number.isFinite(item.start),
+        )
+      : [];
+  const keyPoints = timestampItems(analysis.key_points);
+  const claims = timestampItems(analysis.claims);
+  const summary = analysisValueText(analysis.summary);
+  const hasDetailedNotes =
+    noteSections.length > 0 || definitions.length > 0 || examples.length > 0;
+
+  if (
+    !summary.trim() &&
+    !hasDetailedNotes &&
+    !topics.length &&
+    !concepts.length &&
+    !prerequisites.length &&
+    !upcomingTopics.length &&
+    !keyPoints.length &&
+    !claims.length &&
+    !questions.length
+  ) {
+    return (
+      <p className="video-context-status">
+        Analysis exists, but it contains no displayable content.
+      </p>
+    );
+  }
+
+  const renderTextList = (items: string[]) => (
+    <ul className="dashboard-analysis-list">
+      {items.map((item, index) => (
+        <li key={`${item}-${index}`}>{item}</li>
+      ))}
+    </ul>
+  );
+  const renderTimestampList = (
+    items: Array<{ text: string; start: number }>,
+  ) => (
+    <ul className="dashboard-analysis-list dashboard-analysis-timestamps">
+      {items.map((item, index) => {
+        const url = getYoutubeWatchUrl(youtubeId, Math.floor(item.start));
+        return (
+          <li key={`${item.start}-${index}`}>
+            {url ? (
+              <a href={url} target="_blank" rel="noopener noreferrer">
+                <time>{formatTimestamp(item.start)}</time>
+                <span>{item.text}</span>
+                <ExternalLink size={13} aria-hidden="true" />
+              </a>
+            ) : (
+              <>
+                <time>{formatTimestamp(item.start)}</time>
+                <span>{item.text}</span>
+              </>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+
+  return (
+    <section className="video-analysis-panel" aria-label="AI Video Analysis">
+      <h2 className="video-analysis-title">AI Video Analysis</h2>
+      <div className="video-analysis-cards">
+        {summary.trim() && (
+          <DashboardAnalysisCard
+            title="Summary"
+            icon={<FileText size={14} />}
+            expanded={analysisExpandedSections.has("summary")}
+            onToggle={() => toggleAnalysisSection("summary")}
+          >
+            <p>{summary}</p>
+          </DashboardAnalysisCard>
+        )}
+        {hasDetailedNotes && (
+          <DashboardAnalysisCard
+            title="Detailed Notes"
+            icon={<BookOpen size={14} />}
+            expanded={analysisExpandedSections.has("detailed-notes")}
+            onToggle={() => toggleAnalysisSection("detailed-notes")}
+          >
+            <div className="dashboard-analysis-note-sections">
+              {noteSections.map((section, index) => (
+                <section key={`${section.heading}-${index}`}>
+                  <h3>{section.heading}</h3>
+                  <p>{section.content}</p>
+                </section>
+              ))}
+              {definitions.length > 0 && (
+                <section>
+                  <h3>Definitions</h3>
+                  {renderTextList(definitions)}
+                </section>
+              )}
+              {examples.length > 0 && (
+                <section>
+                  <h3>Examples</h3>
+                  {renderTextList(examples)}
+                </section>
+              )}
+            </div>
+          </DashboardAnalysisCard>
+        )}
+        {topics.length > 0 && (
+          <DashboardAnalysisCard
+            title="Topics"
+            icon={<Tags size={14} />}
+            expanded={analysisExpandedSections.has("topics")}
+            onToggle={() => toggleAnalysisSection("topics")}
+          >
+            {renderTextList(topics)}
+          </DashboardAnalysisCard>
+        )}
+        {concepts.length > 0 && (
+          <DashboardAnalysisCard
+            title="Concepts"
+            icon={<Lightbulb size={14} />}
+            expanded={analysisExpandedSections.has("concepts")}
+            onToggle={() => toggleAnalysisSection("concepts")}
+          >
+            {renderTextList(concepts)}
+          </DashboardAnalysisCard>
+        )}
+        {prerequisites.length > 0 && (
+          <DashboardAnalysisCard
+            title="Prerequisites"
+            icon={<GraduationCap size={14} />}
+            expanded={analysisExpandedSections.has("prerequisites")}
+            onToggle={() => toggleAnalysisSection("prerequisites")}
+          >
+            {renderTextList(prerequisites)}
+          </DashboardAnalysisCard>
+        )}
+        {upcomingTopics.length > 0 && (
+          <DashboardAnalysisCard
+            title="Upcoming Topics"
+            icon={<Route size={14} />}
+            expanded={analysisExpandedSections.has("upcoming-topics")}
+            onToggle={() => toggleAnalysisSection("upcoming-topics")}
+          >
+            {renderTextList(upcomingTopics)}
+          </DashboardAnalysisCard>
+        )}
+        {keyPoints.length > 0 && (
+          <DashboardAnalysisCard
+            title="Key Points"
+            icon={<ListChecks size={14} />}
+            expanded={analysisExpandedSections.has("key-points")}
+            onToggle={() => toggleAnalysisSection("key-points")}
+          >
+            {renderTimestampList(keyPoints)}
+          </DashboardAnalysisCard>
+        )}
+        {claims.length > 0 && (
+          <DashboardAnalysisCard
+            title="Claims"
+            icon={<BadgeCheck size={14} />}
+            expanded={analysisExpandedSections.has("claims")}
+            onToggle={() => toggleAnalysisSection("claims")}
+          >
+            {renderTimestampList(claims)}
+          </DashboardAnalysisCard>
+        )}
+        {questions.length > 0 && (
+          <DashboardAnalysisCard
+            title="Questions"
+            icon={<CircleHelp size={14} />}
+            expanded={analysisExpandedSections.has("questions")}
+            onToggle={() => toggleAnalysisSection("questions")}
+          >
+            {renderTextList(questions)}
+          </DashboardAnalysisCard>
+        )}
+      </div>
+    </section>
+  );
 }
 
 function NoteWorkspaceLoading() {
@@ -1307,8 +2224,12 @@ function NoteWorkspace({
   onDirtyChange,
   onSaved,
   onFolderUpdated,
+  onDeleted,
 }: NoteWorkspaceProps) {
   const isNew = location.mode === "new";
+  const hasVideo =
+    note?.note_type === "VIDEO" && typeof note.video === "number";
+  const videoMetadata = hasVideo ? note?.video_detail : null;
   const [mode, setMode] = useState<NoteWorkspaceMode>(
     isNew ? "write" : "read",
   );
@@ -1318,7 +2239,18 @@ function NoteWorkspace({
   );
   const [noteDocument, setNoteDocument] = useState(savedDocument);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [videoContextState, setVideoContextState] =
+    useState<DashboardVideoContextState>(() =>
+      hasVideo && videoMetadata?.youtube_id
+        ? { status: "loading" }
+        : {
+            status: "error",
+            message: "Video details are unavailable for this note.",
+          },
+    );
   const [isOrganizerOpen, setIsOrganizerOpen] = useState(false);
   const [newNoteFolder, setNewNoteFolder] = useState<DashboardFolder | null>(
     null,
@@ -1362,10 +2294,40 @@ function NoteWorkspace({
     }
   }, [mode]);
 
-  const discardAndSwitchToRead = () => {
+  useEffect(() => {
+    const youtubeId = note?.video_detail?.youtube_id;
+    if (!hasVideo || !youtubeId) return;
+
+    let active = true;
+    getDashboardVideoContext(youtubeId)
+      .then((data) => {
+        if (active) setVideoContextState({ status: "ready", data });
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setVideoContextState({
+            status: "error",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Could not load video details.",
+          });
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [hasVideo, note?.video_detail?.youtube_id]);
+
+  const discardAndSwitchToRead = (
+    targetMode: "read" | "transcript" | "analysis" = "read",
+  ) => {
     if (
       isDirty &&
-      !window.confirm("Discard your unsaved changes and switch to read mode?")
+      !window.confirm(
+        `Discard your unsaved changes and switch to ${targetMode} mode?`,
+      )
     ) {
       return;
     }
@@ -1379,8 +2341,9 @@ function NoteWorkspace({
     setSaveError(null);
     setNoteProposals(new Map());
     setAssistanceErrors(new Map());
+    setIsExportMenuOpen(false);
     onDirtyChange(false);
-    setMode("read");
+    setMode(targetMode);
   };
 
   const improveBlock = async (block: NoteBlock) => {
@@ -1641,13 +2604,29 @@ function NoteWorkspace({
     }
   };
 
+  const handleDeleteNote = async () => {
+    if (!note || !window.confirm(`Delete "${note.title}"? This cannot be undone.`)) {
+      return;
+    }
+
+    setIsDeleting(true);
+    setSaveError(null);
+    try {
+      await deleteDashboardNote(note.id);
+      onDeleted(note.id);
+    } catch (error) {
+      setSaveError(
+        error instanceof Error ? error.message : "Could not delete this note.",
+      );
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const pageHeading =
     isNew ? "New standalone note" : note?.title || "Note workspace";
   const updatedDate = note ? formatNoteDate(note.updated_at) : null;
   const createdDate = note ? formatNoteDate(note.created_at) : null;
-  const hasVideo =
-    note?.note_type === "VIDEO" && typeof note.video === "number";
-  const videoMetadata = hasVideo ? note.video_detail : null;
   const videoUrl = getYoutubeWatchUrl(videoMetadata?.youtube_id);
   const thumbnailUrl = safeExternalHttpUrl(videoMetadata?.thumbnail_url);
   const noteTimestamp =
@@ -1702,7 +2681,11 @@ function NoteWorkspace({
                 aria-pressed={mode === "read"}
                 className={mode === "read" ? "is-active" : ""}
                 onClick={() => {
-                  if (mode === "write") discardAndSwitchToRead();
+                  if (mode === "write") {
+                    discardAndSwitchToRead();
+                  } else {
+                    setMode("read");
+                  }
                 }}
               >
                 READ
@@ -1713,21 +2696,59 @@ function NoteWorkspace({
               aria-pressed={mode === "write"}
               className={mode === "write" ? "is-active" : ""}
               onClick={() => {
-                if (mode === "read") {
-                  setSaveError(null);
-                  setMode("write");
-                }
+                setSaveError(null);
+                setMode("write");
               }}
             >
               WRITE
             </button>
+            {hasVideo && (
+              <>
+                <button
+                  type="button"
+                  aria-pressed={mode === "transcript"}
+                  className={mode === "transcript" ? "is-active" : ""}
+                  onClick={() => {
+                    if (mode === "write") {
+                      discardAndSwitchToRead("transcript");
+                    } else {
+                      setMode("transcript");
+                    }
+                  }}
+                >
+                  TRANSCRIPT
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={mode === "analysis"}
+                  className={mode === "analysis" ? "is-active" : ""}
+                  onClick={() => {
+                    if (mode === "write") {
+                      discardAndSwitchToRead("analysis");
+                    } else {
+                      setMode("analysis");
+                    }
+                  }}
+                >
+                  ANALYSIS
+                </button>
+              </>
+            )}
           </div>
         </header>
 
         <section className="note-workspace-body" aria-labelledby="workspace-title">
           <div className="note-workspace-heading">
             <div>
-              <p className="eyebrow">{mode === "read" ? "READ MODE" : "WRITE MODE"}</p>
+              <p className="eyebrow">
+                {mode === "read"
+                  ? "READ MODE"
+                  : mode === "write"
+                    ? "WRITE MODE"
+                    : mode === "transcript"
+                      ? "VIDEO TRANSCRIPT"
+                      : "VIDEO ANALYSIS"}
+              </p>
               <h1 id="workspace-title" ref={pageTitleRef} tabIndex={-1}>
                 {pageHeading}
               </h1>
@@ -1760,6 +2781,64 @@ function NoteWorkspace({
                 <Save size={16} aria-hidden="true" />
                 {isSaving ? "Saving…" : "Save note"}
               </button>
+            )}
+            {mode === "read" && note && (
+              <div className="workspace-read-actions">
+                <div className="workspace-export">
+                  <button
+                    className="workspace-secondary-button"
+                    type="button"
+                    aria-haspopup="menu"
+                    aria-expanded={isExportMenuOpen}
+                    onClick={() => setIsExportMenuOpen((open) => !open)}
+                  >
+                    <Download size={15} aria-hidden="true" />
+                    Export
+                  </button>
+                  {isExportMenuOpen && (
+                    <div className="workspace-export-menu" role="menu">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          void downloadNoteAsPdf(note)
+                            .then(() => setIsExportMenuOpen(false))
+                            .catch((error: unknown) => {
+                              setSaveError(
+                                error instanceof Error
+                                  ? error.message
+                                  : "Could not export this note as a PDF.",
+                              );
+                            });
+                        }}
+                      >
+                        <FileText size={15} aria-hidden="true" />
+                        Download PDF
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          downloadNoteAsHtml(note);
+                          setIsExportMenuOpen(false);
+                        }}
+                      >
+                        <FileCode2 size={15} aria-hidden="true" />
+                        Download HTML
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <button
+                  className="workspace-delete-button"
+                  type="button"
+                  onClick={() => void handleDeleteNote()}
+                  disabled={isDeleting}
+                >
+                  <Trash2 size={15} aria-hidden="true" />
+                  {isDeleting ? "Deleting…" : "Delete"}
+                </button>
+              </div>
             )}
           </div>
 
@@ -1911,7 +2990,7 @@ function NoteWorkspace({
                 Blocks are saved in their original structured order. Existing video, folder, timestamp, and note-type associations are preserved.
               </p>
             </div>
-          ) : note ? (
+          ) : mode === "read" && note ? (
             <div className="note-workspace-content">
               <NoteReader
                 note={note}
@@ -1943,6 +3022,13 @@ function NoteWorkspace({
                   </p>
                 )}
             </div>
+          ) : mode === "transcript" ? (
+            <VideoTranscriptPanel state={videoContextState} />
+          ) : mode === "analysis" ? (
+            <VideoAnalysisPanel
+              state={videoContextState}
+              youtubeId={videoMetadata?.youtube_id}
+            />
           ) : null}
         </section>
       </div>
@@ -1977,6 +3063,11 @@ function safeExternalHttpUrl(value?: string): string | null {
   } catch {
     return null;
   }
+}
+
+function safeNoteImageUrl(value: string): string | null {
+  if (value.startsWith("data:image/")) return value;
+  return safeExternalHttpUrl(value);
 }
 
 function formatNoteDate(value?: string): string | null {
@@ -2850,14 +3941,14 @@ function DashboardKnowledgeWorkspace({
                   </div>
                   <p className="knowledge-answer-text">{message.content}</p>
                   {message.role === "ASSISTANT" && (
-                    <div className="knowledge-sources">
-                      <div className="knowledge-sources-heading">
+                    <details className="knowledge-sources">
+                      <summary className="knowledge-sources-heading">
                         <h3>Sources</h3>
                         <span>
                           {message.sources.length}{" "}
                           {message.sources.length === 1 ? "source" : "sources"}
                         </span>
-                      </div>
+                      </summary>
                       {message.sources.length === 0 ? (
                         <p className="knowledge-no-sources">
                           No matching sources were found for this answer.
@@ -2930,7 +4021,7 @@ function DashboardKnowledgeWorkspace({
                           })}
                         </div>
                       )}
-                    </div>
+                    </details>
                   )}
                 </article>
               ))}

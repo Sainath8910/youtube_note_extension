@@ -34,10 +34,35 @@ export interface DashboardData {
   recentNotes: DashboardNote[];
 }
 
+export interface DashboardTranscriptSegment {
+  text: string;
+  start: number;
+  duration: number;
+}
+
+export interface DashboardVideoContext {
+  transcriptStatus: string;
+  transcriptLanguage: string;
+  transcript: DashboardTranscriptSegment[] | null;
+  analysisStatus: string;
+  analysis: Record<string, unknown> | null;
+}
+
 let inFlightDashboardRequest: Promise<DashboardData> | null = null;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isTranscriptSegment(value: unknown): value is DashboardTranscriptSegment {
+  return (
+    isObject(value) &&
+    typeof value.text === "string" &&
+    typeof value.start === "number" &&
+    Number.isFinite(value.start) &&
+    typeof value.duration === "number" &&
+    Number.isFinite(value.duration)
+  );
 }
 
 function isValidDateString(value: unknown): value is string {
@@ -221,6 +246,59 @@ export async function updateDashboardNoteFolder(
   return normalizeSavedNote(savedNote);
 }
 
+export async function deleteDashboardNote(noteId: number): Promise<void> {
+  await sendNoteCommand({ type: "DELETE_NOTE", noteId });
+}
+
+export async function getDashboardVideoContext(
+  youtubeId: string,
+): Promise<DashboardVideoContext> {
+  const response = await sendNoteCommand({
+    type: "GET_VIDEO_CONTEXT",
+    videoId: youtubeId,
+  });
+  if (!isObject(response) || !isObject(response.video)) {
+    throw new Error("The video service returned invalid video details.");
+  }
+
+  const video = response.video;
+  let transcript: DashboardTranscriptSegment[] | null = null;
+  if (video.transcript !== null && video.transcript !== undefined) {
+    if (
+      !Array.isArray(video.transcript) ||
+      !video.transcript.every(isTranscriptSegment)
+    ) {
+      throw new Error("The video service returned an invalid transcript.");
+    }
+    transcript = video.transcript;
+  }
+
+  if (
+    video.analysis !== null &&
+    video.analysis !== undefined &&
+    !isObject(video.analysis)
+  ) {
+    throw new Error("The video service returned invalid analysis.");
+  }
+
+  return {
+    transcriptStatus:
+      typeof video.transcript_status === "string"
+        ? video.transcript_status
+        : "UNKNOWN",
+    transcriptLanguage:
+      typeof video.transcript_language === "string"
+        ? video.transcript_language
+        : "",
+    transcript,
+    analysisStatus:
+      typeof video.analysis_status === "string"
+        ? video.analysis_status
+        : "UNKNOWN",
+    analysis: isObject(video.analysis) ? video.analysis : null,
+  };
+}
+
 export function upsertDashboardNote(
   data: DashboardData,
   note: DashboardNote,
@@ -230,6 +308,16 @@ export function upsertDashboardNote(
     note,
   ];
   return deriveDashboardData(notes, Date.now());
+}
+
+export function removeDashboardNote(
+  data: DashboardData,
+  noteId: number,
+): DashboardData {
+  return deriveDashboardData(
+    data.notes.filter((note) => note.id !== noteId),
+    Date.now(),
+  );
 }
 
 export async function createStandaloneDashboardNote(data: {
