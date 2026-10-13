@@ -26,12 +26,10 @@ import {
   Lightbulb,
   ListChecks,
   Minus,
-  Moon,
   Play,
   Plus,
   Route,
   Save,
-  Sun,
   Tags,
   Trash2,
   X,
@@ -109,8 +107,6 @@ type PreviousContextLoadState =
 
 type ViewMode = "LIST" | "READER" | "WRITER" | "AI";
 
-type Theme = "dark" | "light";
-
 type PrimaryWorkspace = "NOTES" | "ANALYSIS";
 
 type NoteNavigationTab = "READ" | "WRITE" | "AI";
@@ -141,7 +137,7 @@ export interface ThemeColors {
   shadow: string;
 }
 
-const DARK_THEME: ThemeColors = {
+const SIDEBAR_COLORS: ThemeColors = {
   panel: "#0b1220",
   header: "#0f172a",
   surface: "#101827",
@@ -156,24 +152,7 @@ const DARK_THEME: ThemeColors = {
   shadow: "rgba(0, 0, 0, 0.38)",
 };
 
-const LIGHT_THEME: ThemeColors = {
-  panel: "#ffffff",
-  header: "#f8fafc",
-  surface: "#f1f5f9",
-  input: "#ffffff",
-  border: "#d7dee8",
-  text: "#334155",
-  primaryText: "#172033",
-  muted: "#64748b",
-  accent: "#0891b2",
-  accentSoft: "#ecfeff",
-  danger: "#dc2626",
-  shadow: "rgba(15, 23, 42, 0.18)",
-};
-
 const POSITION_STORAGE_KEY = "youtubeKnowledgeSidebarPosition";
-
-const THEME_STORAGE_KEY = "youtubeKnowledgeTheme";
 
 const SIDEBAR_WIDTH = 390;
 const SIDEBAR_HEIGHT_MARGIN = 30;
@@ -329,27 +308,6 @@ async function loadPosition(): Promise<Position> {
 function savePosition(position: Position): void {
   chrome.storage.local.set({
     [POSITION_STORAGE_KEY]: position,
-  });
-}
-
-async function loadTheme(): Promise<Theme> {
-  return new Promise((resolve) => {
-    chrome.storage.local.get([THEME_STORAGE_KEY], (result) => {
-      const stored = result[THEME_STORAGE_KEY];
-
-      if (stored === "light" || stored === "dark") {
-        resolve(stored);
-        return;
-      }
-
-      resolve("dark");
-    });
-  });
-}
-
-function saveTheme(theme: Theme): void {
-  chrome.storage.local.set({
-    [THEME_STORAGE_KEY]: theme,
   });
 }
 
@@ -3132,7 +3090,7 @@ function AnalysisWorkspace({
             borderRadius: 8,
             padding: "10px 12px",
             background: colors.accent,
-            color: colors.panel === DARK_THEME.panel ? "#082f49" : "#ffffff",
+            color: "#082f49",
             fontSize: 12,
             fontWeight: 800,
             cursor: isAnalyzing || !canAnalyze ? "default" : "pointer",
@@ -3422,6 +3380,8 @@ export default function Sidebar({
   const [expandedConcepts, setExpandedConcepts] = useState<Record<string, boolean>>(
     {},
   );
+  const [isPreviousContextExpanded, setIsPreviousContextExpanded] =
+    useState(true);
 
   const [editingNote, setEditingNote] = useState<VideoNote | null>(null);
 
@@ -3437,8 +3397,6 @@ export default function Sidebar({
   const [minimized, setMinimized] = useState(false);
 
   const [position, setPosition] = useState<Position>(getDefaultPosition());
-
-  const [theme, setTheme] = useState<Theme>("dark");
 
   const [dragging, setDragging] = useState(false);
 
@@ -3524,12 +3482,6 @@ export default function Sidebar({
       }
     });
 
-    void loadTheme().then((loadedTheme) => {
-      if (mounted) {
-        setTheme(loadedTheme);
-      }
-    });
-
     return () => {
       mounted = false;
     };
@@ -3603,7 +3555,7 @@ export default function Sidebar({
     };
   }, []);
 
-  const colors = theme === "dark" ? DARK_THEME : LIGHT_THEME;
+  const colors = SIDEBAR_COLORS;
   const previousContextStatus =
     previousContextState.videoId === videoId
       ? previousContextState.status
@@ -3749,14 +3701,9 @@ export default function Sidebar({
     }
   }
 
-  function toggleTheme() {
-    const nextTheme: Theme = theme === "dark" ? "light" : "dark";
-
-    setTheme(nextTheme);
-    saveTheme(nextTheme);
-  }
-
   function openReader(note: VideoNote) {
+    setHoveredNoteId(null);
+    setFocusedNoteId(null);
     setSelectedNote(note);
     setEditingNote(null);
     setViewMode("READER");
@@ -3769,6 +3716,8 @@ export default function Sidebar({
   }
 
   function returnToList() {
+    setHoveredNoteId(null);
+    setFocusedNoteId(null);
     setSelectedNote(null);
     setEditingNote(null);
     setViewMode("LIST");
@@ -4133,26 +4082,6 @@ export default function Sidebar({
           <button
             type="button"
             onPointerDown={(event) => event.stopPropagation()}
-            onClick={toggleTheme}
-            title={
-              theme === "dark" ? "Switch to day mode" : "Switch to night mode"
-            }
-            style={{
-              ...topIconButton,
-              color: colors.accent,
-              borderColor: colors.border,
-            }}
-          >
-            {theme === "dark" ? (
-              <Sun size={15} aria-hidden="true" />
-            ) : (
-              <Moon size={15} aria-hidden="true" />
-            )}
-          </button>
-
-          <button
-            type="button"
-            onPointerDown={(event) => event.stopPropagation()}
             onClick={closeSidebar}
             title="Close"
             style={{
@@ -4169,13 +4098,14 @@ export default function Sidebar({
       <div
         onPointerDown={(event) => event.stopPropagation()}
         style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(2, 1fr)",
+          display: "flex",
           gap: 4,
           padding: "7px 10px",
           background: colors.header,
           borderBottom: `1px solid ${colors.border}`,
         }}
+        role="group"
+        aria-label="Workspace"
       >
         {(
           [
@@ -4189,10 +4119,12 @@ export default function Sidebar({
               key={workspace}
               type="button"
               onClick={() => setActiveWorkspace(workspace)}
+              aria-pressed={active}
               style={{
-                border: `1px solid ${active ? colors.accent : colors.border}`,
-                borderRadius: 7,
-                padding: "8px 10px",
+                flex: 1,
+                border: `1px solid ${active ? colors.accent : "transparent"}`,
+                borderRadius: 6,
+                padding: "7px 10px",
                 background: active ? colors.accentSoft : "transparent",
                 color: active ? colors.accent : colors.muted,
                 cursor: "pointer",
@@ -4210,13 +4142,15 @@ export default function Sidebar({
         <div
           onPointerDown={(event) => event.stopPropagation()}
           style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(4, 1fr)",
+            display: "flex",
+            alignItems: "center",
             gap: 4,
             padding: "6px 10px",
             background: colors.surface,
             borderBottom: `1px solid ${colors.border}`,
           }}
+          role="group"
+          aria-label="Note view"
         >
           <button
             type="button"
@@ -4225,9 +4159,12 @@ export default function Sidebar({
             title="Back to notes list"
             aria-label="Back to notes list"
             style={{
+              width: 25,
+              height: 25,
+              flex: "0 0 25px",
               border: `1px solid ${colors.border}`,
-              borderRadius: 7,
-              padding: "7px 8px",
+              borderRadius: 6,
+              padding: 0,
               background: "transparent",
               color: colors.muted,
               cursor:
@@ -4239,36 +4176,49 @@ export default function Sidebar({
           >
             <ArrowLeft size={14} aria-hidden="true" />
           </button>
-          {(
-            [
-              ["READ", "Read", "READER"],
-              ["WRITE", "Write", "WRITER"],
-              ["AI", "AI", "AI"],
-            ] as const
-          ).map(([tab, label, mode]) => {
-            const active = viewMode === mode;
-            return (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => handleNoteNavigation(tab)}
-                disabled={!selectedNote}
-                style={{
-                  border: `1px solid ${active ? colors.accent : colors.border}`,
-                  borderRadius: 7,
-                  padding: "7px 8px",
-                  background: active ? colors.accentSoft : "transparent",
-                  color: active ? colors.accent : colors.muted,
-                  cursor: selectedNote ? "pointer" : "default",
-                  fontSize: 10,
-                  fontWeight: active ? 800 : 650,
-                  opacity: selectedNote ? 1 : 0.5,
-                }}
-              >
-                {label}
-              </button>
-            );
-          })}
+          <div
+            style={{
+              display: "flex",
+              flex: 1,
+              gap: 3,
+              padding: 3,
+              borderRadius: 7,
+              background: colors.panel,
+            }}
+          >
+            {(
+              [
+                ["READ", "Read", "READER"],
+                ["WRITE", "Write", "WRITER"],
+                ["AI", "AI", "AI"],
+              ] as const
+            ).map(([tab, label, mode]) => {
+              const active = viewMode === mode;
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => handleNoteNavigation(tab)}
+                  disabled={!selectedNote}
+                  aria-pressed={active}
+                  style={{
+                    flex: 1,
+                    border: "none",
+                    borderRadius: 5,
+                    padding: "6px 7px",
+                    background: active ? colors.accentSoft : "transparent",
+                    color: active ? colors.accent : colors.muted,
+                    cursor: selectedNote ? "pointer" : "default",
+                    fontSize: 10,
+                    fontWeight: active ? 800 : 650,
+                    opacity: selectedNote ? 1 : 0.5,
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -4339,18 +4289,42 @@ export default function Sidebar({
                 border: `1px solid ${colors.border}`,
               }}
             >
-              <h2
+              <button
+                type="button"
+                aria-expanded={isPreviousContextExpanded}
+                aria-controls="previous-context-content"
+                onClick={() =>
+                  setIsPreviousContextExpanded((expanded) => !expanded)
+                }
                 style={{
-                  margin: "0 0 8px",
+                  display: "flex",
+                  width: "100%",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: 0,
+                  border: "none",
+                  background: "transparent",
+                  color: colors.primaryText,
                   fontSize: 12,
                   fontWeight: 800,
-                  color: colors.primaryText,
+                  textAlign: "left",
+                  cursor: "pointer",
                 }}
               >
                 My Previous Context
-              </h2>
+                {isPreviousContextExpanded ? (
+                  <ChevronDown size={14} aria-hidden="true" />
+                ) : (
+                  <ChevronRight size={14} aria-hidden="true" />
+                )}
+              </button>
 
-              {previousContextStatus === "loading" ? (
+              <div
+                id="previous-context-content"
+                hidden={!isPreviousContextExpanded}
+                style={{ marginTop: 8 }}
+              >
+                {previousContextStatus === "loading" ? (
                 <div
                   role="status"
                   style={{ color: colors.muted, fontSize: 11 }}
@@ -4385,8 +4359,8 @@ export default function Sidebar({
                     Retry
                   </button>
                 </div>
-              ) : (
-                <>
+                ) : (
+                  <>
                   {previousContext?.exact.length ? (
                     <div style={{ marginBottom: 10 }}>
                       <h3
@@ -5259,8 +5233,9 @@ export default function Sidebar({
                         No previous context found.
                       </div>
                     )}
-                </>
-              )}
+                  </>
+                )}
+              </div>
             </section>
 
             <div
@@ -5317,7 +5292,7 @@ export default function Sidebar({
                   borderRadius: 8,
                   padding: "8px 10px",
                   background: colors.accent,
-                  color: theme === "dark" ? "#082f49" : "#ffffff",
+                  color: "#082f49",
                   fontSize: 11,
                   fontWeight: 800,
                   cursor: "pointer",
@@ -5398,7 +5373,7 @@ export default function Sidebar({
                       borderRadius: 8,
                       padding: "9px 12px",
                       background: colors.accent,
-                      color: theme === "dark" ? "#082f49" : "#ffffff",
+                      color: "#082f49",
                       fontSize: 11,
                       fontWeight: 800,
                       cursor: isFetchingTranscript ? "default" : "pointer",
@@ -5711,7 +5686,14 @@ export default function Sidebar({
             fontWeight: 650,
           }}
         >
-          <Check size={13} aria-hidden="true" />
+          <Check
+            size={13}
+            aria-hidden="true"
+            style={{
+              color: "#4ade80",
+              filter: "drop-shadow(0 0 5px rgba(74, 222, 128, 0.9))",
+            }}
+          />
           Transcript Ready
         </div>
       )}

@@ -2370,6 +2370,9 @@
 
 .workspace-back-button {
   justify-self: start;
+  min-height: 28px;
+  padding: 0 7px;
+  font-size: 10px;
 }
 
 .workspace-back-button:hover,
