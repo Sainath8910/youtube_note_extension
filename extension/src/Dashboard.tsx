@@ -4,10 +4,8 @@ import {
   useState,
   type FormEvent,
   type Ref,
-  type ReactNode,
 } from "react";
 import {
-  BadgeCheck,
   AlertCircle,
   ArrowLeft,
   ArrowUpRight,
@@ -15,15 +13,11 @@ import {
   BookOpen,
   Clapperboard,
   Check,
-  ChevronDown,
-  ChevronRight,
-  CircleHelp,
   Clock3,
   Download,
   ExternalLink,
   FileText,
   FileCode2,
-  GraduationCap,
   Folder,
   House,
   Menu,
@@ -33,12 +27,9 @@ import {
   Search,
   Save,
   Sparkles,
-  Lightbulb,
-  ListChecks,
   LogOut,
-  Route,
-  Tags,
   Trash2,
+  UserRound,
   Video,
   X,
 } from "lucide-react";
@@ -107,12 +98,15 @@ import {
   requestNoteImprovement,
 } from "./noteAssistanceApi";
 import "./dashboard.css";
+import { AnalysisDisplay } from "./AnalysisDisplay";
 import {
   VideoDetailPage,
   VideosLibraryPage,
   type VideoTab,
 } from "./VideosPage";
 import { listDashboardVideos, type LibraryVideo } from "./videoApi";
+import { ProfilePage } from "./ProfilePage";
+import type { AuthActionResult } from "./authFlow";
 
 type DashboardRoute =
   | "dashboard"
@@ -120,7 +114,8 @@ type DashboardRoute =
   | "videos"
   | "folders"
   | "search"
-  | "knowledge";
+  | "knowledge"
+  | "profile";
 
 type NoteWorkspaceLocation =
   | { mode: "new"; youtubeId?: string }
@@ -147,6 +142,7 @@ const navigation = [
   { route: "folders", label: "Folders", icon: Folder },
   { route: "search", label: "Search", icon: Search },
   { route: "knowledge", label: "AI / Knowledge", icon: Brain },
+  { route: "profile", label: "Profile", icon: UserRound },
 ] as const satisfies ReadonlyArray<{
   route: DashboardRoute;
   label: string;
@@ -177,6 +173,11 @@ const routeContent: Record<
     description: "Ask questions grounded in your saved learning.",
     message: "",
   },
+  profile: {
+    title: "Profile",
+    description: "Manage your account details and password.",
+    message: "",
+  },
 };
 
 function locationFromHash(hash = window.location.hash): DashboardLocation {
@@ -191,9 +192,11 @@ function locationFromHash(hash = window.location.hash): DashboardLocation {
       folderId: null,
       videoId: videoMatch[1],
       videoTab:
-        requestedTab === "analysis" || requestedTab === "notes"
+        requestedTab === "analysis" ||
+        requestedTab === "transcript" ||
+        requestedTab === "notes"
           ? requestedTab
-          : "transcript",
+          : "notes",
     };
   }
 
@@ -265,11 +268,18 @@ function isKnownDashboardHash(hash: string): boolean {
 function Dashboard({
   authenticatedUser,
   onSignOut,
+  onChangePassword,
+  onSendPasswordRecovery,
   signingOut,
   signOutError,
 }: {
   authenticatedUser: SafeAuthUser;
   onSignOut: () => void;
+  onChangePassword: (
+    currentPassword: string,
+    newPassword: string,
+  ) => Promise<AuthActionResult>;
+  onSendPasswordRecovery: (email: string) => Promise<AuthActionResult>;
   signingOut: boolean;
   signOutError?: string;
 }) {
@@ -607,7 +617,7 @@ function Dashboard({
             </a>
           </header>
 
-          {route === "dashboard" ? (
+          <div hidden={route !== "dashboard"}>
             <DashboardHome
               dashboardState={dashboardState}
               onRetry={refreshDashboard}
@@ -618,7 +628,8 @@ function Dashboard({
                 window.location.hash = `#/notes/${noteId}`;
               }}
             />
-          ) : route === "notes" ? (
+          </div>
+          {route === "dashboard" ? null : route === "notes" ? (
             <NotesPage
               dashboardState={dashboardState}
               onRetry={refreshDashboard}
@@ -679,6 +690,12 @@ function Dashboard({
               onOpenNote={(noteId) => {
                 window.location.hash = `#/notes/${noteId}`;
               }}
+            />
+          ) : route === "profile" ? (
+            <ProfilePage
+              authenticatedUser={authenticatedUser}
+              onChangePassword={onChangePassword}
+              onSendPasswordRecovery={onSendPasswordRecovery}
             />
           ) : (
             <WorkspacePlaceholder route={route} />
@@ -829,11 +846,17 @@ function DashboardHome({
   onNavigateToNotes,
   onOpenNote,
 }: DashboardHomeProps) {
+  const [recentVideosRefreshKey, setRecentVideosRefreshKey] = useState(0);
+  const refreshDashboardAndVideos = () => {
+    onRetry();
+    setRecentVideosRefreshKey((key) => key + 1);
+  };
+
   return (
     <>
       <DashboardOverview
         dashboardState={dashboardState}
-        onRefresh={onRetry}
+        onRefresh={refreshDashboardAndVideos}
       />
       <div className="dashboard-columns">
         <RecentNotes
@@ -842,7 +865,7 @@ function DashboardHome({
           onViewAll={onNavigateToNotes}
           onOpenNote={onOpenNote}
         />
-        <RecentVideos />
+        <RecentVideos refreshKey={recentVideosRefreshKey} />
       </div>
       <QuickActions onViewNotes={onNavigateToNotes} />
     </>
@@ -1033,9 +1056,27 @@ function RecentNotes({
           </div>
           <p>Sorted by most recently updated</p>
         </div>
-        <a className="text-link" href="#/notes">
-          View all <ArrowUpRight size={14} aria-hidden="true" />
-        </a>
+        <div className="recent-section-actions">
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Refresh recent notes"
+            title="Refresh recent notes"
+            disabled={dashboardState.status === "loading"}
+            onClick={onRetry}
+          >
+            <RefreshCw
+              className={
+                dashboardState.status === "loading" ? "is-spinning" : undefined
+              }
+              size={15}
+              aria-hidden="true"
+            />
+          </button>
+          <a className="text-link" href="#/notes">
+            View all <ArrowUpRight size={14} aria-hidden="true" />
+          </a>
+        </div>
       </div>
       <NotesListState
         dashboardState={dashboardState}
@@ -1055,14 +1096,15 @@ function RecentNotes({
 
 type RecentVideosState =
   | { status: "loading" }
-  | { status: "error"; message: string; attempt: number }
-  | { status: "ready"; videos: LibraryVideo[]; attempt: number };
+  | { status: "error"; message: string; requestKey: string }
+  | { status: "ready"; videos: LibraryVideo[]; requestKey: string };
 
-function RecentVideos() {
+function RecentVideos({ refreshKey }: { refreshKey: number }) {
   const [state, setState] = useState<RecentVideosState>({
     status: "loading",
   });
   const [retryCount, setRetryCount] = useState(0);
+  const requestKey = `${refreshKey}:${retryCount}`;
 
   useEffect(() => {
     let active = true;
@@ -1076,7 +1118,7 @@ function RecentVideos() {
           setState({
             status: "ready",
             videos: page.results,
-            attempt: retryCount,
+            requestKey,
           });
         }
       })
@@ -1084,7 +1126,7 @@ function RecentVideos() {
         if (!active) return;
         setState({
           status: "error",
-          attempt: retryCount,
+          requestKey,
           message:
             error instanceof Error
               ? error.message
@@ -1094,22 +1136,10 @@ function RecentVideos() {
     return () => {
       active = false;
     };
-  }, [retryCount]);
-
-  useEffect(() => {
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") {
-        setRetryCount((count) => count + 1);
-      }
-    };
-    document.addEventListener("visibilitychange", refreshWhenVisible);
-    return () => {
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
-    };
-  }, []);
+  }, [requestKey]);
 
   const currentState =
-    state.status !== "loading" && state.attempt !== retryCount
+    state.status !== "loading" && state.requestKey !== requestKey
       ? { status: "loading" as const }
       : state;
 
@@ -1125,9 +1155,25 @@ function RecentVideos() {
           </div>
           <p>Recently updated in your library</p>
         </div>
-        <a className="text-link" href="#/videos">
-          View all <ArrowUpRight size={14} aria-hidden="true" />
-        </a>
+        <div className="recent-section-actions">
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Refresh recent videos"
+            title="Refresh recent videos"
+            disabled={currentState.status === "loading"}
+            onClick={() => setRetryCount((count) => count + 1)}
+          >
+            <RefreshCw
+              className={currentState.status === "loading" ? "is-spinning" : undefined}
+              size={15}
+              aria-hidden="true"
+            />
+          </button>
+          <a className="text-link" href="#/videos">
+            View all <ArrowUpRight size={14} aria-hidden="true" />
+          </a>
+        </div>
       </div>
       {currentState.status === "loading" ? (
         <div
@@ -2115,78 +2161,6 @@ async function downloadNoteAsPdf(note: DashboardNote): Promise<void> {
   pdf.save(noteExportFileName(note.title, "pdf"));
 }
 
-function analysisValueText(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return "";
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function analysisStringList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter(
-        (item): item is string =>
-          typeof item === "string" && item.trim().length > 0,
-      )
-    : [];
-}
-
-function analysisNoteSections(
-  value: unknown,
-): Array<{ heading: string; content: string }> {
-  return Array.isArray(value)
-    ? value.filter(
-        (item): item is { heading: string; content: string } =>
-          isPlainObject(item) &&
-          typeof item.heading === "string" &&
-          item.heading.trim().length > 0 &&
-          typeof item.content === "string" &&
-          item.content.trim().length > 0,
-      )
-    : [];
-}
-
-function DashboardAnalysisCard({
-  title,
-  icon,
-  expanded,
-  onToggle,
-  children,
-}: {
-  title: string;
-  icon: ReactNode;
-  expanded: boolean;
-  onToggle: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <section className="dashboard-analysis-card">
-      <button
-        className="dashboard-analysis-card-heading"
-        type="button"
-        aria-expanded={expanded}
-        onClick={onToggle}
-      >
-        <span className="dashboard-analysis-card-icon" aria-hidden="true">
-          {icon}
-        </span>
-        <span>{title}</span>
-        {expanded ? (
-          <ChevronDown size={15} aria-hidden="true" />
-        ) : (
-          <ChevronRight size={15} aria-hidden="true" />
-        )}
-      </button>
-      {expanded && <div className="dashboard-analysis-card-content">{children}</div>}
-    </section>
-  );
-}
-
 function VideoTranscriptPanel({
   state,
 }: {
@@ -2234,21 +2208,6 @@ function VideoAnalysisPanel({
   state: DashboardVideoContextState;
   youtubeId?: string;
 }) {
-  const [analysisExpandedSections, setAnalysisExpandedSections] = useState(
-    () => new Set(["summary"]),
-  );
-  const toggleAnalysisSection = (sectionId: string) => {
-    setAnalysisExpandedSections((current) => {
-      const next = new Set(current);
-      if (next.has(sectionId)) {
-        next.delete(sectionId);
-      } else {
-        next.add(sectionId);
-      }
-      return next;
-    });
-  };
-
   if (state.status === "loading") {
     return <p className="video-context-status">Loading the saved analysis…</p>;
   }
@@ -2262,202 +2221,8 @@ function VideoAnalysisPanel({
       </p>
     );
   }
-
-  const analysis = state.data.analysis;
-  const detailedNotes = isPlainObject(analysis.detailed_notes)
-    ? analysis.detailed_notes
-    : {};
-  const noteSections = analysisNoteSections(detailedNotes.sections);
-  const definitions = analysisStringList(detailedNotes.definitions);
-  const examples = analysisStringList(detailedNotes.examples);
-  const topics = analysisStringList(analysis.topics);
-  const concepts = analysisStringList(analysis.concepts);
-  const prerequisites = analysisStringList(analysis.prerequisites);
-  const upcomingTopics = analysisStringList(analysis.upcoming_topics);
-  const questions = analysisStringList(analysis.questions);
-  const timestampItems = (value: unknown) =>
-    Array.isArray(value)
-      ? value.filter(
-          (item): item is { text: string; start: number } =>
-            isPlainObject(item) &&
-            typeof item.text === "string" &&
-            item.text.trim().length > 0 &&
-            typeof item.start === "number" &&
-            Number.isFinite(item.start),
-        )
-      : [];
-  const keyPoints = timestampItems(analysis.key_points);
-  const claims = timestampItems(analysis.claims);
-  const summary = analysisValueText(analysis.summary);
-  const hasDetailedNotes =
-    noteSections.length > 0 || definitions.length > 0 || examples.length > 0;
-
-  if (
-    !summary.trim() &&
-    !hasDetailedNotes &&
-    !topics.length &&
-    !concepts.length &&
-    !prerequisites.length &&
-    !upcomingTopics.length &&
-    !keyPoints.length &&
-    !claims.length &&
-    !questions.length
-  ) {
-    return (
-      <p className="video-context-status">
-        Analysis exists, but it contains no displayable content.
-      </p>
-    );
-  }
-
-  const renderTextList = (items: string[]) => (
-    <ul className="dashboard-analysis-list">
-      {items.map((item, index) => (
-        <li key={`${item}-${index}`}>{item}</li>
-      ))}
-    </ul>
-  );
-  const renderTimestampList = (
-    items: Array<{ text: string; start: number }>,
-  ) => (
-    <ul className="dashboard-analysis-list dashboard-analysis-timestamps">
-      {items.map((item, index) => {
-        const url = getYoutubeWatchUrl(youtubeId, Math.floor(item.start));
-        return (
-          <li key={`${item.start}-${index}`}>
-            {url ? (
-              <a href={url} target="_blank" rel="noopener noreferrer">
-                <time>{formatTimestamp(item.start)}</time>
-                <span>{item.text}</span>
-                <ExternalLink size={13} aria-hidden="true" />
-              </a>
-            ) : (
-              <>
-                <time>{formatTimestamp(item.start)}</time>
-                <span>{item.text}</span>
-              </>
-            )}
-          </li>
-        );
-      })}
-    </ul>
-  );
-
   return (
-    <section className="video-analysis-panel" aria-label="AI Video Analysis">
-      <h2 className="video-analysis-title">AI Video Analysis</h2>
-      <div className="video-analysis-cards">
-        {summary.trim() && (
-          <DashboardAnalysisCard
-            title="Summary"
-            icon={<FileText size={14} />}
-            expanded={analysisExpandedSections.has("summary")}
-            onToggle={() => toggleAnalysisSection("summary")}
-          >
-            <p>{summary}</p>
-          </DashboardAnalysisCard>
-        )}
-        {hasDetailedNotes && (
-          <DashboardAnalysisCard
-            title="Detailed Notes"
-            icon={<BookOpen size={14} />}
-            expanded={analysisExpandedSections.has("detailed-notes")}
-            onToggle={() => toggleAnalysisSection("detailed-notes")}
-          >
-            <div className="dashboard-analysis-note-sections">
-              {noteSections.map((section, index) => (
-                <section key={`${section.heading}-${index}`}>
-                  <h3>{section.heading}</h3>
-                  <p>{section.content}</p>
-                </section>
-              ))}
-              {definitions.length > 0 && (
-                <section>
-                  <h3>Definitions</h3>
-                  {renderTextList(definitions)}
-                </section>
-              )}
-              {examples.length > 0 && (
-                <section>
-                  <h3>Examples</h3>
-                  {renderTextList(examples)}
-                </section>
-              )}
-            </div>
-          </DashboardAnalysisCard>
-        )}
-        {topics.length > 0 && (
-          <DashboardAnalysisCard
-            title="Topics"
-            icon={<Tags size={14} />}
-            expanded={analysisExpandedSections.has("topics")}
-            onToggle={() => toggleAnalysisSection("topics")}
-          >
-            {renderTextList(topics)}
-          </DashboardAnalysisCard>
-        )}
-        {concepts.length > 0 && (
-          <DashboardAnalysisCard
-            title="Concepts"
-            icon={<Lightbulb size={14} />}
-            expanded={analysisExpandedSections.has("concepts")}
-            onToggle={() => toggleAnalysisSection("concepts")}
-          >
-            {renderTextList(concepts)}
-          </DashboardAnalysisCard>
-        )}
-        {prerequisites.length > 0 && (
-          <DashboardAnalysisCard
-            title="Prerequisites"
-            icon={<GraduationCap size={14} />}
-            expanded={analysisExpandedSections.has("prerequisites")}
-            onToggle={() => toggleAnalysisSection("prerequisites")}
-          >
-            {renderTextList(prerequisites)}
-          </DashboardAnalysisCard>
-        )}
-        {upcomingTopics.length > 0 && (
-          <DashboardAnalysisCard
-            title="Upcoming Topics"
-            icon={<Route size={14} />}
-            expanded={analysisExpandedSections.has("upcoming-topics")}
-            onToggle={() => toggleAnalysisSection("upcoming-topics")}
-          >
-            {renderTextList(upcomingTopics)}
-          </DashboardAnalysisCard>
-        )}
-        {keyPoints.length > 0 && (
-          <DashboardAnalysisCard
-            title="Key Points"
-            icon={<ListChecks size={14} />}
-            expanded={analysisExpandedSections.has("key-points")}
-            onToggle={() => toggleAnalysisSection("key-points")}
-          >
-            {renderTimestampList(keyPoints)}
-          </DashboardAnalysisCard>
-        )}
-        {claims.length > 0 && (
-          <DashboardAnalysisCard
-            title="Claims"
-            icon={<BadgeCheck size={14} />}
-            expanded={analysisExpandedSections.has("claims")}
-            onToggle={() => toggleAnalysisSection("claims")}
-          >
-            {renderTimestampList(claims)}
-          </DashboardAnalysisCard>
-        )}
-        {questions.length > 0 && (
-          <DashboardAnalysisCard
-            title="Questions"
-            icon={<CircleHelp size={14} />}
-            expanded={analysisExpandedSections.has("questions")}
-            onToggle={() => toggleAnalysisSection("questions")}
-          >
-            {renderTextList(questions)}
-          </DashboardAnalysisCard>
-        )}
-      </div>
-    </section>
+    <AnalysisDisplay analysis={state.data.analysis} youtubeId={youtubeId} />
   );
 }
 

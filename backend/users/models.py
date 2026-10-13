@@ -8,3 +8,16 @@ class User(AbstractUser):
         blank=True,
         unique=True,
     )
+    public_username = models.CharField(
+        max_length=30,
+        null=True,
+        blank=True,
+    )
+
+    class Meta(AbstractUser.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                models.functions.Lower("public_username"),
+                name="users_public_username_ci_unique",
+            ),
+        ]

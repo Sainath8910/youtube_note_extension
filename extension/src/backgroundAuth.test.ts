@@ -24,6 +24,114 @@ vi.mock("@supabase/supabase-js", async (importOriginal) => {
   return { ...actual, createClient: vi.fn() };
 });
 
+describe("background password management", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("sends recovery email to the supplied extension recovery route", async () => {
+    const authClient = setupClient();
+    const { storage } = createStorage();
+    const auth = createBackgroundAuth(config, storage);
+
+    const result = await auth.sendPasswordRecovery(
+      "learner@example.com",
+      "chrome-extension://extension-id/index.html?flow=recovery",
+    );
+
+    expect(result).toEqual({ success: true, data: null });
+    expect(authClient.resetPasswordForEmail).toHaveBeenCalledWith(
+      "learner@example.com",
+      {
+        redirectTo: "chrome-extension://extension-id/index.html?flow=recovery",
+      },
+    );
+  });
+
+  it("verifies the current email password before changing it", async () => {
+    const authClient = setupClient();
+    const emailUser = {
+      ...user,
+      app_metadata: { providers: ["email"] },
+    } as User;
+    authClient.getUser.mockResolvedValueOnce({
+      data: { user: emailUser },
+      error: null,
+    });
+    const { storage } = createStorage();
+    const auth = createBackgroundAuth(config, storage);
+
+    const result = await auth.changePassword("old-password", "new-password");
+
+    expect(result).toEqual({ success: true, data: null });
+    expect(authClient.signInWithPassword).toHaveBeenCalledWith({
+      email: "learner@example.com",
+      password: "old-password",
+    });
+    expect(authClient.updateUser).toHaveBeenCalledWith({
+      password: "new-password",
+    });
+  });
+
+  it("directs Google-only accounts to recovery instead of claiming verification", async () => {
+    const authClient = setupClient();
+    const { storage } = createStorage();
+    const auth = createBackgroundAuth(config, storage);
+
+    const result = await auth.changePassword("unused-password", "new-password");
+
+    expect(result).toMatchObject({
+      success: false,
+      error: {
+        message: "This account has no password. Use Forgot password? to establish one.",
+      },
+    });
+    expect(authClient.signInWithPassword).not.toHaveBeenCalled();
+    expect(authClient.updateUser).not.toHaveBeenCalled();
+  });
+
+  it("exchanges and clears a recovery session after resetting the password", async () => {
+    const authClient = setupClient();
+    const { storage } = createStorage();
+    const auth = createBackgroundAuth(config, storage);
+
+    const result = await auth.resetPassword({ code: "recovery-code" }, "new-password");
+
+    expect(result).toEqual({ success: true, data: null });
+    expect(authClient.exchangeCodeForSession).toHaveBeenCalledWith("recovery-code");
+    expect(authClient.updateUser).toHaveBeenCalledWith({
+      password: "new-password",
+    });
+    expect(authClient.signOut).toHaveBeenCalledWith({ scope: "local" });
+    expect(JSON.stringify(result)).not.toContain("recovery-code");
+  });
+
+  it("requires reset-password requests to originate from the recovery route", () => {
+    expect(
+      isTrustedDashboardAuthSender(
+        {
+          id: "extension-id",
+          url: "chrome-extension://extension-id/index.html?flow=recovery",
+        },
+        "extension-id",
+        "chrome-extension://extension-id/index.html",
+        true,
+      ),
+    ).toBe(true);
+    expect(
+      isTrustedDashboardAuthSender(
+        {
+          id: "extension-id",
+          url: "chrome-extension://extension-id/index.html#/dashboard",
+        },
+        "extension-id",
+        "chrome-extension://extension-id/index.html",
+        true,
+      ),
+    ).toBe(false);
+  });
+});
+
 const config = {
   url: "https://project.supabase.co",
   publishableKey: "sb_publishable_test-public-key",
@@ -106,6 +214,11 @@ function setupClient(
       },
       error: options.authError ?? null,
     })),
+    getUser: vi.fn(async () => ({ data: { user }, error: null })),
+    resetPasswordForEmail: vi.fn(async () => ({ error: null })),
+    setSession: vi.fn(async () => ({ data: { session: null, user }, error: null })),
+    verifyOtp: vi.fn(async () => ({ data: { session: null, user }, error: null })),
+    updateUser: vi.fn(async () => ({ data: { user }, error: null })),
     signInWithOAuth: vi.fn(async () => ({
       data: { provider: "google", url: oauthUrl.href, flowId: null },
       error: null,
@@ -149,6 +262,18 @@ function createAuthSpies() {
     signInWithGoogle: vi.fn(async () => ({
       success: true as const,
       data: { user: null, requiresEmailConfirmation: false },
+    })),
+    sendPasswordRecovery: vi.fn(async () => ({
+      success: true as const,
+      data: null,
+    })),
+    changePassword: vi.fn(async () => ({
+      success: true as const,
+      data: null,
+    })),
+    resetPassword: vi.fn(async () => ({
+      success: true as const,
+      data: null,
     })),
     signOut: vi.fn(async () => ({ success: true as const, data: null })),
     getAccessToken: vi.fn(async () => ({

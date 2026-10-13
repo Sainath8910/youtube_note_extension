@@ -4,6 +4,7 @@ import type {
   AuthRuntimeResponse,
   AuthStatus,
   AuthFailure,
+  RecoveryCredentials,
   SafeAuthUser,
 } from "./backgroundAuth";
 
@@ -36,6 +37,10 @@ export type AuthMessageSender = (
   request: AuthRuntimeRequest,
 ) => Promise<AuthRuntimeResponse>;
 
+export type AuthActionResult =
+  | { success: true }
+  | { success: false; message: string };
+
 export interface AuthFlow {
   getSnapshot(): AuthFlowState;
   subscribe(listener: () => void): () => void;
@@ -45,6 +50,15 @@ export interface AuthFlow {
   signUp(email: string, password: string): Promise<void>;
   signInWithGoogle(): Promise<void>;
   signOut(): Promise<void>;
+  sendPasswordRecovery(email: string): Promise<AuthActionResult>;
+  changePassword(
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<AuthActionResult>;
+  resetPassword(
+    credentials: RecoveryCredentials,
+    newPassword: string,
+  ): Promise<AuthActionResult>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -201,6 +215,35 @@ export function sendAuthRuntimeMessage(
       reject(new Error("Could not reach the authentication service."));
     }
   });
+}
+
+async function runAuthAction(
+  send: AuthMessageSender,
+  request: AuthRuntimeRequest,
+): Promise<AuthActionResult> {
+  try {
+    const response = await send(request);
+    if (response.type !== request.type && response.type !== "AUTH_ERROR") {
+      return {
+        success: false,
+        message: "The authentication service returned an invalid response.",
+      };
+    }
+    if (!("result" in response)) {
+      return {
+        success: false,
+        message: "The authentication service returned an invalid response.",
+      };
+    }
+    return response.result.success
+      ? { success: true }
+      : { success: false, message: response.result.error.message };
+  } catch {
+    return {
+      success: false,
+      message: "Could not reach the authentication service. Please try again.",
+    };
+  }
 }
 
 export function isDashboardAccessible(
@@ -555,6 +598,26 @@ export function createAuthFlow(send: AuthMessageSender = sendAuthRuntimeMessage)
         if (version === attempt) state = { ...state, pending: null };
         listeners.forEach((listener) => listener());
       }
+    },
+    sendPasswordRecovery(email) {
+      return runAuthAction(send, {
+        type: "AUTH_SEND_PASSWORD_RECOVERY",
+        email,
+      });
+    },
+    changePassword(currentPassword, newPassword) {
+      return runAuthAction(send, {
+        type: "AUTH_CHANGE_PASSWORD",
+        currentPassword,
+        newPassword,
+      });
+    },
+    resetPassword(credentials, newPassword) {
+      return runAuthAction(send, {
+        type: "AUTH_RESET_PASSWORD",
+        credentials,
+        newPassword,
+      });
     },
   };
   return flow;

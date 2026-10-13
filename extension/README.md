@@ -16,13 +16,18 @@ opened directly:
   actions.
 - `#/notes` — notes returned by the existing authenticated `GET /api/notes/`
   endpoint.
-- `#/videos`, `#/folders`, `#/search`, and `#/knowledge` — navigation
-  placeholders that explain which existing workflows or backend surfaces are
-  available.
+- `#/videos`, `#/folders`, `#/search`, and `#/knowledge` — browse the video
+  library, organize folders, find folders and note titles, and ask questions
+  grounded in saved learning.
+- `#/profile` — view the authenticated email, create or edit a unique username,
+  and manage password settings.
 
-Video and folder collection APIs, dashboard search, and a full account/profile
-screen are not currently implemented. The dashboard requires a Supabase
-session, with login, signup, and sign-out handled through the background
+Usernames are trimmed and stored in lowercase; comparisons are
+case-insensitive. They must contain 3–30 lowercase letters, numbers, or
+underscores.
+
+The dashboard requires a Supabase session, with login, signup, password
+recovery, and sign-out handled through the background
 service worker. Django API requests are brokered by that worker and carry the
 current Supabase access token as a Bearer token; access tokens are not returned
 to dashboard or content-script messages. Existing records belonging to the
@@ -86,6 +91,18 @@ flow. Configure each redirect in the system that receives it:
    `chrome.identity.getRedirectURL()`, then add that exact URL (including any
    path) to the Supabase allowed redirect URLs. The manifest's `identity`
    permission is required for this flow.
+
+### Password recovery configuration
+
+Forgot Password uses Supabase Auth and returns to the dashboard's recovery
+screen. Add the exact URL generated for the installed extension to
+**Supabase Dashboard → Authentication → URL Configuration → Redirect URLs**:
+run `chrome.runtime.getURL("index.html?flow=recovery")` in the extension
+service worker DevTools console and allow that exact result. Do not substitute
+the OAuth `chromiumapp.org` callback: recovery returns to the extension
+dashboard itself. The reset screen consumes the recovery credential in the
+background service worker, removes it from the dashboard address bar, updates
+the password, and clears the temporary recovery session.
 
 The extension uses the public Supabase URL and publishable key only. Keep the
 Google client secret in Supabase Dashboard; never add it to extension source or

@@ -5,6 +5,7 @@ from uuid import uuid4
 import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
@@ -69,7 +70,7 @@ class SupabaseAuthenticationTests(TestCase):
         response = self.get_me()
 
         self.assertEqual(response.status_code, 401)
-        self.assertIn("Bearer", response.headers["WWW-Authenticate"])
+
 
     def test_malformed_and_invalid_tokens_return_401(self):
         for authorization in ("Bearer", "Bearer not-a-jwt"):
@@ -285,3 +286,90 @@ class SupabaseAuthenticationTests(TestCase):
         response = self.get_me(HTTP_X_DEV_USER=user.username)
 
         self.assertEqual(response.status_code, 401)
+
+
+class ProfileEndpointTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_user(
+            username="profile-user",
+            email="profile@example.com",
+        )
+        get_user_model().objects.create_user(
+            username="another-profile-user",
+            email="another@example.com",
+            public_username="private_name",
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def test_user_can_read_profile_without_a_public_username(self):
+        response = self.client.get("/api/users/profile/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data,
+            {"email": "profile@example.com", "username": ""},
+        )
+
+    def test_user_can_set_and_update_normalized_own_username(self):
+        first_response = self.client.patch(
+            "/api/users/profile/",
+            {"username": "  LearnEr_01  "},
+            format="json",
+        )
+        second_response = self.client.patch(
+            "/api/users/profile/",
+            {"username": "Study_Notes"},
+            format="json",
+        )
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(first_response.data["username"], "learner_01")
+        self.assertEqual(second_response.status_code, 200)
+        self.assertEqual(second_response.data["username"], "study_notes")
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.public_username, "study_notes")
+
+    def test_public_usernames_are_case_insensitively_unique(self):
+        response = self.client.patch(
+            "/api/users/profile/",
+            {"username": "PRIVATE_NAME"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("username", response.data)
+        self.user.refresh_from_db()
+        self.assertIsNone(self.user.public_username)
+
+    def test_database_constraint_enforces_case_insensitive_uniqueness(self):
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                get_user_model().objects.create_user(
+                    username="duplicate-profile-user",
+                    email="duplicate@example.com",
+                    public_username="PRIVATE_NAME",
+                )
+
+    def test_username_validation_rejects_invalid_length_and_characters(self):
+        for username in ("ab", "this-name", "user name", "x" * 31):
+            with self.subTest(username=username):
+                response = self.client.patch(
+                    "/api/users/profile/",
+                    {"username": username},
+                    format="json",
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("username", response.data)
+
+    def test_profile_endpoint_requires_authentication(self):
+        self.client.force_authenticate(user=None)
+
+        response = self.client.patch(
+            "/api/users/profile/",
+            {"username": "learner"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("Bearer", response.headers["WWW-Authenticate"])

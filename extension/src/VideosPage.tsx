@@ -17,6 +17,7 @@ import {
   Video as VideoIcon,
 } from "lucide-react";
 import type { DashboardNote } from "./dashboardApi";
+import { AnalysisDisplay } from "./AnalysisDisplay";
 import {
   getDashboardVideoAnalysis,
   getDashboardVideoDetails,
@@ -191,6 +192,16 @@ export function VideosLibraryPage({
   const totalPages = Math.ceil(totalCount / pageSize);
   const firstResult = totalCount === 0 ? 0 : (page - 1) * pageSize + 1;
   const lastResult = Math.min(page * pageSize, totalCount);
+  const pageNumbers = Array.from(
+    { length: Math.min(5, totalPages) },
+    (_, index) => {
+      const firstVisiblePage = Math.max(
+        1,
+        Math.min(page - 2, totalPages - 4),
+      );
+      return firstVisiblePage + index;
+    },
+  );
   const hasFilters =
     query.trim() !== "" ||
     transcriptFilter !== "all" ||
@@ -215,22 +226,41 @@ export function VideosLibraryPage({
               : "Your video library"}
           </span>
         </div>
-        <button
-          className="icon-button"
-          type="button"
-          aria-label="Refresh videos"
-          disabled={refreshing}
-          onClick={() => {
-            setIsRefreshing(true);
-            setRefreshCount((count) => count + 1);
-          }}
-        >
-          <RefreshCw
-            className={refreshing ? "is-spinning" : undefined}
-            size={16}
-            aria-hidden="true"
-          />
-        </button>
+        <div className="video-library-actions">
+          <label className="video-page-size">
+            <span>Per page</span>
+            <select
+              value={pageSize}
+              onChange={(event) => {
+                const nextPageSize = Number(event.target.value);
+                if ([12, 24, 50].includes(nextPageSize)) {
+                  setPage(1);
+                  setPageSize(nextPageSize);
+                }
+              }}
+            >
+              <option value={12}>12</option>
+              <option value={24}>24</option>
+              <option value={50}>50</option>
+            </select>
+          </label>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Refresh videos"
+            disabled={refreshing}
+            onClick={() => {
+              setIsRefreshing(true);
+              setRefreshCount((count) => count + 1);
+            }}
+          >
+            <RefreshCw
+              className={refreshing ? "is-spinning" : undefined}
+              size={16}
+              aria-hidden="true"
+            />
+          </button>
+        </div>
       </div>
 
       <div className="video-library-controls">
@@ -434,48 +464,50 @@ export function VideosLibraryPage({
                 </article>
               ))}
             </div>
-            <nav className="video-pagination" aria-label="Video library pages">
-              <p aria-live="polite">
+            <nav className="notes-pagination" aria-label="Video library pages">
+              <span className="notes-pagination-summary" aria-live="polite">
                 Showing {firstResult}–{lastResult} of {totalCount}{" "}
                 {totalCount === 1 ? "video" : "videos"}
-              </p>
-              <div className="video-pagination-controls">
-                <label className="video-page-size">
-                  <span>Per page</span>
-                  <select
-                    value={pageSize}
-                    onChange={(event) => {
-                      const nextPageSize = Number(event.target.value);
-                      if ([12, 24, 50].includes(nextPageSize)) {
-                        setPage(1);
-                        setPageSize(nextPageSize);
+              </span>
+              <div className="notes-pagination-controls">
+                {totalPages > 1 && (
+                  <>
+                    <button
+                      className="notes-page-button notes-page-step"
+                      type="button"
+                      disabled={page <= 1}
+                      onClick={() =>
+                        setPage((currentPage) => Math.max(1, currentPage - 1))
                       }
-                    }}
-                  >
-                    <option value={12}>12</option>
-                    <option value={24}>24</option>
-                    <option value={50}>50</option>
-                  </select>
-                </label>
-                <span className="video-pagination-current">
-                  Page {page} of {totalPages}
-                </span>
-                <button
-                  className="workspace-secondary-button"
-                  type="button"
-                  disabled={page <= 1 || refreshing}
-                  onClick={() => setPage((currentPage) => currentPage - 1)}
-                >
-                  Previous
-                </button>
-                <button
-                  className="workspace-secondary-button"
-                  type="button"
-                  disabled={page >= totalPages || refreshing}
-                  onClick={() => setPage((currentPage) => currentPage + 1)}
-                >
-                  Next
-                </button>
+                    >
+                      Prev
+                    </button>
+                    {pageNumbers.map((pageNumber) => (
+                      <button
+                        type="button"
+                        key={pageNumber}
+                        className={`notes-page-button${pageNumber === page ? " is-current" : ""}`}
+                        aria-label={`Page ${pageNumber}`}
+                        aria-current={pageNumber === page ? "page" : undefined}
+                        onClick={() => setPage(pageNumber)}
+                      >
+                        {pageNumber}
+                      </button>
+                    ))}
+                    <button
+                      className="notes-page-button notes-page-step"
+                      type="button"
+                      disabled={page === totalPages}
+                      onClick={() =>
+                        setPage((currentPage) =>
+                          Math.min(totalPages, currentPage + 1),
+                        )
+                      }
+                    >
+                      Next
+                    </button>
+                  </>
+                )}
               </div>
             </nav>
           </>
@@ -705,86 +737,16 @@ function TranscriptPanel({
   );
 }
 
-const analysisLabels: Record<string, string> = {
-  summary: "Overview",
-  detailed_notes: "Detailed notes",
-  topics: "Topics covered",
-  concepts: "Key concepts",
-  prerequisites: "Prerequisites",
-  upcoming_topics: "Next topics",
-  key_points: "Key takeaways",
-  claims: "Claims",
-  questions: "Questions",
-};
-
-const ignoredAnalysisFields = new Set([
-  "id",
-  "video",
-  "model",
-  "analysis_version",
-  "created_at",
-  "updated_at",
-]);
-
-function readableLabel(value: string): string {
-  return value
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (character) => character.toLocaleUpperCase());
-}
-
-function AnalysisValue({ value }: { value: unknown }) {
-  if (typeof value === "string") return <p>{value}</p>;
-  if (typeof value === "number" || typeof value === "boolean") {
-    return <p>{String(value)}</p>;
-  }
-  if (Array.isArray(value)) {
-    if (value.every((item) => typeof item === "string" || typeof item === "number")) {
-      return (
-        <ul>
-          {value.map((item, index) => <li key={`${index}-${String(item)}`}>{String(item)}</li>)}
-        </ul>
-      );
-    }
-    return (
-      <div className="video-analysis-nested-list">
-        {value.map((item, index) => (
-          <div className="video-analysis-nested-item" key={index}>
-            <AnalysisValue value={item} />
-          </div>
-        ))}
-      </div>
-    );
-  }
-  if (value && typeof value === "object") {
-    const entries = Object.entries(value).filter(
-      ([key, entry]) =>
-        !ignoredAnalysisFields.has(key) &&
-        entry !== null &&
-        entry !== "" &&
-        (!Array.isArray(entry) || entry.length > 0),
-    );
-    return entries.length ? (
-      <dl className="video-analysis-fields">
-        {entries.map(([key, entry]) => (
-          <div key={key}>
-            <dt>{readableLabel(key)}</dt>
-            <dd><AnalysisValue value={entry} /></dd>
-          </div>
-        ))}
-      </dl>
-    ) : null;
-  }
-  return null;
-}
-
 function AnalysisPanel({
   state,
+  youtubeId,
   onRetry,
   onGenerate,
   generating,
   generationError,
 }: {
   state: LoadState<VideoAnalysis>;
+  youtubeId: string;
   onRetry: () => void;
   onGenerate: () => void;
   generating: boolean;
@@ -850,32 +812,7 @@ function AnalysisPanel({
     );
   }
 
-  const sections = Object.entries(state.data.analysis).filter(
-    ([key, value]) =>
-      !ignoredAnalysisFields.has(key) &&
-      value !== null &&
-      value !== "" &&
-      (!Array.isArray(value) || value.length > 0) &&
-      (typeof value !== "object" ||
-        Array.isArray(value) ||
-        Object.keys(value).length > 0),
-  );
-  if (sections.length === 0) {
-    return <p className="video-detail-empty">No analysis sections are available.</p>;
-  }
-  return (
-    <div className="video-analysis-panel">
-      {sections.map(([key, value]) => {
-        const label = analysisLabels[key] ?? readableLabel(key);
-        return (
-          <section className="video-analysis-section" key={key}>
-            <h3>{label}</h3>
-            <AnalysisValue value={value} />
-          </section>
-        );
-      })}
-    </div>
-  );
+  return <AnalysisDisplay analysis={state.data.analysis} youtubeId={youtubeId} />;
 }
 
 function VideoNotesPanel({
@@ -1244,7 +1181,7 @@ export function VideoDetailPage({
         )}
         <div className="video-detail-toolbar">
           <nav className="video-detail-tabs" aria-label="Video details">
-            {(["transcript", "analysis", "notes"] as const).map((tab) => (
+            {(["notes", "analysis", "transcript"] as const).map((tab) => (
               <button
                 className={activeTab === tab ? "is-active" : ""}
                 type="button"
@@ -1256,7 +1193,7 @@ export function VideoDetailPage({
                 {tab === "transcript"
                   ? "Transcript"
                   : tab === "analysis"
-                    ? "AI Analysis"
+                    ? "Analysis"
                     : `Notes (${detail.data.notes.length})`}
               </button>
             ))}
@@ -1292,6 +1229,7 @@ export function VideoDetailPage({
           ) : activeTab === "analysis" ? (
             <AnalysisPanel
               state={analysisState ?? { status: "loading" }}
+              youtubeId={youtubeId}
               onRetry={() => {
                 analysisCached.current = false;
                 setAnalysisState(null);

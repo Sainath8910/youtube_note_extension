@@ -263,6 +263,29 @@
   opacity: 0.6;
 }
 
+.auth-switch a,
+.auth-forgot button {
+  padding: 0;
+  color: #67e8f9;
+  background: none;
+  border: 0;
+  font: inherit;
+  font-weight: 650;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.auth-forgot {
+  margin: 12px 0 0;
+  text-align: center;
+  font-size: 11px;
+}
+
+.auth-forgot button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .auth-footer {
   margin: 22px 0 0;
   padding-top: 17px;

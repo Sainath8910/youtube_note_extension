@@ -441,4 +441,50 @@ describe("dashboard authentication flow", () => {
     });
     expect(isDashboardAccessible(flow.getSnapshot())).toBe(true);
   });
+
+  it("reports password recovery success only after the background confirms it", async () => {
+    const requests: AuthRuntimeRequest[] = [];
+    const flow = createAuthFlow(async (request) => {
+      requests.push(request);
+      return {
+        type: "AUTH_SEND_PASSWORD_RECOVERY",
+        result: { success: true, data: null },
+      };
+    });
+
+    const result = await flow.sendPasswordRecovery("learner@example.com");
+
+    expect(result).toEqual({ success: true });
+    expect(requests).toEqual([
+      {
+        type: "AUTH_SEND_PASSWORD_RECOVERY",
+        email: "learner@example.com",
+      },
+    ]);
+  });
+
+  it("sends only the supplied recovery credential and new password to the background", async () => {
+    const requests: AuthRuntimeRequest[] = [];
+    const flow = createAuthFlow(async (request) => {
+      requests.push(request);
+      return {
+        type: "AUTH_RESET_PASSWORD",
+        result: { success: true, data: null },
+      };
+    });
+
+    const result = await flow.resetPassword(
+      { code: "recovery-code" },
+      "new-password",
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(requests).toEqual([
+      {
+        type: "AUTH_RESET_PASSWORD",
+        credentials: { code: "recovery-code" },
+        newPassword: "new-password",
+      },
+    ]);
+  });
 });

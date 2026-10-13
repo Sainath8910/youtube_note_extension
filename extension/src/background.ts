@@ -376,6 +376,51 @@ async function respondToFolderRequest(
   }
 }
 
+async function respondToProfileRequest(
+  method: "GET" | "PATCH",
+  data: { username: string } | undefined,
+  sendResponse: (response: unknown) => void,
+): Promise<void> {
+  try {
+    const response = await fetchDjangoApiWithAuth(
+      "http://localhost:8000/api/users/profile/",
+      {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        ...(data === undefined ? {} : { body: JSON.stringify(data) }),
+      },
+    );
+    const responseText = await response.text();
+    let responseData: unknown = null;
+    if (responseText) {
+      try {
+        responseData = JSON.parse(responseText);
+      } catch {
+        sendResponse({
+          success: false,
+          status: response.ok ? 502 : response.status,
+          data: { detail: "The Profile service returned invalid JSON." },
+        });
+        return;
+      }
+    }
+    sendResponse({
+      success: response.ok,
+      status: response.status,
+      data: responseData,
+    });
+  } catch (error) {
+    console.error("[YouTube Knowledge] Profile request failed:", error);
+    sendResponse({
+      success: false,
+      status: 0,
+      data: { detail: "Could not reach the Profile service." },
+    });
+  }
+}
+
 async function respondToVideoRequest(
   path: string,
   sendResponse: (response: unknown) => void,
@@ -425,6 +470,53 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse,
     )
   ) {
+    return true;
+  }
+
+  if (isRecord(message) && message.type === "PROFILE_API_REQUEST") {
+    const trustedSender = (() => {
+      try {
+        const senderUrl = new URL(sender.url ?? "");
+        const dashboardUrl = new URL(chrome.runtime.getURL("index.html"));
+        return (
+          sender.id === chrome.runtime.id &&
+          senderUrl.origin === dashboardUrl.origin &&
+          senderUrl.pathname === dashboardUrl.pathname &&
+          senderUrl.search === ""
+        );
+      } catch {
+        return false;
+      }
+    })();
+    if (!trustedSender) {
+      sendResponse({
+        success: false,
+        status: 403,
+        data: { detail: "This profile request is not allowed." },
+      });
+      return true;
+    }
+    if (message.method === "GET") {
+      void respondToProfileRequest("GET", undefined, sendResponse);
+      return true;
+    }
+    if (
+      message.method === "PATCH" &&
+      isRecord(message.data) &&
+      typeof message.data.username === "string"
+    ) {
+      void respondToProfileRequest(
+        "PATCH",
+        { username: message.data.username },
+        sendResponse,
+      );
+      return true;
+    }
+    sendResponse({
+      success: false,
+      status: 400,
+      data: { detail: "The profile request is invalid." },
+    });
     return true;
   }
 
