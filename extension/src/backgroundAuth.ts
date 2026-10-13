@@ -21,6 +21,14 @@ export interface ChromeStorageArea {
   }): Promise<void>;
 }
 
+export interface ChromeIdentityApi {
+  getRedirectURL(path?: string): string;
+  launchWebAuthFlow(details: {
+    url: string;
+    interactive: boolean;
+  }): Promise<string | undefined>;
+}
+
 export interface SafeAuthUser {
   id: string;
   email: string | null;
@@ -44,6 +52,8 @@ export type AuthDiagnosticCode =
   | "AUTH_RATE_LIMITED"
   | "AUTH_NETWORK_ERROR"
   | "AUTH_SERVER_ERROR"
+  | "AUTH_OAUTH_CANCELLED"
+  | "AUTH_OAUTH_FAILED"
   | "AUTH_NOT_CONFIGURED"
   | "AUTH_UNSUPPORTED_BROWSER"
   | "AUTH_STORAGE_UNAVAILABLE"
@@ -68,6 +78,7 @@ export type AuthRuntimeRequest =
   | { type: "AUTH_GET_STATUS" }
   | { type: "AUTH_SIGN_UP"; email: string; password: string }
   | { type: "AUTH_SIGN_IN"; email: string; password: string }
+  | { type: "AUTH_SIGN_IN_WITH_GOOGLE" }
   | { type: "AUTH_SIGN_OUT" };
 
 export type AuthRuntimeResponse =
@@ -75,6 +86,7 @@ export type AuthRuntimeResponse =
   | { type: "AUTH_GET_STATUS"; result: AuthResult<AuthStatus> }
   | { type: "AUTH_SIGN_UP"; result: AuthResult<SafeAuthMutation> }
   | { type: "AUTH_SIGN_IN"; result: AuthResult<SafeAuthMutation> }
+  | { type: "AUTH_SIGN_IN_WITH_GOOGLE"; result: AuthResult<SafeAuthMutation> }
   | { type: "AUTH_SIGN_OUT"; result: AuthResult<null> };
 
 export interface BackgroundAuth {
@@ -82,6 +94,7 @@ export interface BackgroundAuth {
   getStatus(): Promise<AuthResult<AuthStatus>>;
   signUp(email: string, password: string): Promise<AuthResult<SafeAuthMutation>>;
   signIn(email: string, password: string): Promise<AuthResult<SafeAuthMutation>>;
+  signInWithGoogle(): Promise<AuthResult<SafeAuthMutation>>;
   signOut(): Promise<AuthResult<null>>;
   getAccessToken(): Promise<AuthResult<string | null>>;
 }
@@ -120,6 +133,73 @@ function diagnosticForFailureCode(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+type GoogleOAuthFailureStage =
+  | "concurrent_attempt"
+  | "redirect_url"
+  | "authorization_request"
+  | "authorization_url"
+  | "browser_flow"
+  | "callback_url"
+  | "provider_callback"
+  | "callback_code"
+  | "code_exchange"
+  | "session_validation";
+
+const SAFE_OAUTH_ERROR_CODES = new Set([
+  "bad_oauth_state",
+  "email_exists",
+  "flow_state_not_found",
+  "invalid_request",
+  "over_request_rate_limit",
+  "pkce_verification_failed",
+  "provider_disabled",
+  "request_timeout",
+  "unexpected_failure",
+  "validation_failed",
+]);
+
+const SAFE_OAUTH_ERROR_NAMES = new Set([
+  "AuthApiError",
+  "AuthPKCECodeVerifierMissingError",
+  "AuthRetryableFetchError",
+  "AuthUnknownError",
+  "Error",
+  "TypeError",
+]);
+
+function logGoogleOAuthFailure(
+  stage: GoogleOAuthFailureStage,
+  diagnosticCode: "AUTH_OAUTH_FAILED" | "AUTH_OAUTH_CANCELLED" = "AUTH_OAUTH_FAILED",
+  error?: unknown,
+): void {
+  const details = isRecord(error) ? error : {};
+  const errorCode =
+    typeof details.code === "string" &&
+    SAFE_OAUTH_ERROR_CODES.has(details.code.toLowerCase())
+      ? details.code.toLowerCase()
+      : undefined;
+  const errorName =
+    typeof details.name === "string" &&
+    SAFE_OAUTH_ERROR_NAMES.has(details.name)
+      ? details.name
+      : undefined;
+  const httpStatus =
+    typeof details.status === "number" &&
+    Number.isInteger(details.status) &&
+    details.status >= 100 &&
+    details.status <= 599
+      ? details.status
+      : undefined;
+
+  console.warn("[YouTube Knowledge] Google OAuth failed.", {
+    stage,
+    diagnosticCode,
+    ...(errorCode ? { errorCode } : {}),
+    ...(errorName ? { errorName } : {}),
+    ...(httpStatus === undefined ? {} : { httpStatus }),
+  });
 }
 
 export function sanitizeAuthDiagnostic(error: unknown): {
@@ -283,6 +363,7 @@ export function createChromeStorageAdapter(storage: ChromeStorageArea) {
 export function createBackgroundAuth(
   config: SupabasePublicConfig,
   storageArea: ChromeStorageArea,
+  identity?: ChromeIdentityApi,
 ): BackgroundAuth {
   if (
     !config.url ||
@@ -317,6 +398,12 @@ export function createBackgroundAuth(
           "Supabase authentication is not configured.",
         );
       },
+      async signInWithGoogle() {
+        return failure(
+          "AUTH_NOT_CONFIGURED",
+          "Supabase authentication is not configured.",
+        );
+      },
       async signOut() {
         return failure(
           "AUTH_NOT_CONFIGURED",
@@ -338,9 +425,11 @@ export function createBackgroundAuth(
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: false,
+      flowType: "pkce",
     },
   });
   let initialization: Promise<AuthResult<null>> | undefined;
+  let googleSignInInProgress = false;
 
   const initialize = (): Promise<AuthResult<null>> => {
     if (initialization) return initialization;
@@ -457,6 +546,179 @@ export function createBackgroundAuth(
     }
   };
 
+  const signInWithGoogle = async (): Promise<
+    AuthResult<SafeAuthMutation>
+  > => {
+    const ready = await initialize();
+    if (!ready.success) return ready;
+    if (!identity) {
+      return failure(
+        "AUTH_UNSUPPORTED_BROWSER",
+        "Google sign-in requires Chrome identity support. Update Chrome and try again.",
+      );
+    }
+    if (googleSignInInProgress) {
+      logGoogleOAuthFailure("concurrent_attempt");
+      return failure(
+        "AUTH_REQUEST_FAILED",
+        "Google sign-in is already in progress.",
+        "AUTH_OAUTH_FAILED",
+      );
+    }
+    googleSignInInProgress = true;
+    let stage: GoogleOAuthFailureStage = "redirect_url";
+
+    try {
+      const redirectTo = identity.getRedirectURL();
+      const expectedRedirect = new URL(redirectTo);
+      if (
+        expectedRedirect.protocol !== "https:" ||
+        !expectedRedirect.hostname.endsWith(".chromiumapp.org") ||
+        expectedRedirect.username ||
+        expectedRedirect.password
+      ) {
+        logGoogleOAuthFailure(stage);
+        return failure(
+          "AUTH_REQUEST_FAILED",
+          "Chrome returned an invalid Google sign-in redirect.",
+          "AUTH_OAUTH_FAILED",
+        );
+      }
+
+      stage = "authorization_request";
+      const { data, error } = await client.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo,
+          skipBrowserRedirect: true,
+        },
+      });
+      if (error || typeof data.url !== "string") {
+        logGoogleOAuthFailure(stage, "AUTH_OAUTH_FAILED", error);
+        return failure(
+          "AUTH_REQUEST_FAILED",
+          "Google sign-in could not be started. Check your connection and try again.",
+          "AUTH_OAUTH_FAILED",
+        );
+      }
+
+      stage = "authorization_url";
+      const authorizationUrl = new URL(data.url);
+      const expectedSupabaseOrigin = new URL(config.url!).origin;
+      if (
+        authorizationUrl.protocol !== "https:" ||
+        authorizationUrl.origin !== expectedSupabaseOrigin ||
+        authorizationUrl.pathname !== "/auth/v1/authorize" ||
+        authorizationUrl.searchParams.get("provider") !== "google" ||
+        authorizationUrl.searchParams.get("redirect_to") !== redirectTo ||
+        !authorizationUrl.searchParams.get("code_challenge") ||
+        authorizationUrl.searchParams.get("code_challenge_method") !== "s256"
+      ) {
+        logGoogleOAuthFailure(stage);
+        return failure(
+          "AUTH_REQUEST_FAILED",
+          "Google sign-in returned an invalid authorization request.",
+          "AUTH_OAUTH_FAILED",
+        );
+      }
+
+      stage = "browser_flow";
+      const callback = await identity.launchWebAuthFlow({
+        url: authorizationUrl.href,
+        interactive: true,
+      });
+      if (!callback) {
+        logGoogleOAuthFailure(stage, "AUTH_OAUTH_CANCELLED");
+        return failure(
+          "AUTH_REQUEST_FAILED",
+          "Google sign-in was cancelled.",
+          "AUTH_OAUTH_CANCELLED",
+        );
+      }
+
+      stage = "callback_url";
+      const callbackUrl = new URL(callback);
+      if (
+        callbackUrl.origin !== expectedRedirect.origin ||
+        callbackUrl.pathname !== expectedRedirect.pathname ||
+        callbackUrl.username ||
+        callbackUrl.password ||
+        callbackUrl.hash
+      ) {
+        logGoogleOAuthFailure(stage);
+        return failure(
+          "AUTH_REQUEST_FAILED",
+          "Google sign-in returned an invalid callback.",
+          "AUTH_OAUTH_FAILED",
+        );
+      }
+      if (callbackUrl.searchParams.has("error")) {
+        logGoogleOAuthFailure("provider_callback");
+        return failure(
+          "AUTH_REQUEST_FAILED",
+          "Google sign-in was not completed. Review the consent request and try again.",
+          "AUTH_OAUTH_FAILED",
+        );
+      }
+      const code = callbackUrl.searchParams.get("code");
+      if (!code) {
+        logGoogleOAuthFailure("callback_code");
+        return failure(
+          "AUTH_REQUEST_FAILED",
+          "Google sign-in returned an invalid or incomplete callback.",
+          "AUTH_OAUTH_FAILED",
+        );
+      }
+
+      stage = "code_exchange";
+      const exchanged = await client.auth.exchangeCodeForSession(code);
+      if (exchanged.error) {
+        logGoogleOAuthFailure(stage, "AUTH_OAUTH_FAILED", exchanged.error);
+        return failure(
+          "AUTH_REQUEST_FAILED",
+          "Google sign-in could not be completed. Try again.",
+          "AUTH_OAUTH_FAILED",
+        );
+      }
+      if (!exchanged.data.session || !exchanged.data.user) {
+        logGoogleOAuthFailure("session_validation");
+        return failure(
+          "AUTH_REQUEST_FAILED",
+          "Google sign-in could not be completed. Try again.",
+          "AUTH_OAUTH_FAILED",
+        );
+      }
+      return {
+        success: true,
+        data: {
+          user: safeUser(exchanged.data.user),
+          requiresEmailConfirmation: false,
+        },
+      };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message.toLowerCase() : "";
+      const cancelled =
+        message.includes("user did not approve access") ||
+        message.includes("user cancelled") ||
+        message.includes("user canceled");
+      logGoogleOAuthFailure(
+        stage,
+        cancelled ? "AUTH_OAUTH_CANCELLED" : "AUTH_OAUTH_FAILED",
+        error,
+      );
+      return failure(
+        "AUTH_REQUEST_FAILED",
+        cancelled
+          ? "Google sign-in was cancelled."
+          : "Google sign-in could not be completed. Check your connection and try again.",
+        cancelled ? "AUTH_OAUTH_CANCELLED" : "AUTH_OAUTH_FAILED",
+      );
+    } finally {
+      googleSignInInProgress = false;
+    }
+  };
+
   const mutateAuth = async (
     operation: () => Promise<{
       data: { user: User | null; session: unknown };
@@ -512,6 +774,7 @@ export function createBackgroundAuth(
         false,
       );
     },
+    signInWithGoogle,
     async signOut() {
       const ready = await initialize();
       if (!ready.success) return ready;
@@ -545,6 +808,7 @@ export function getBackgroundAuth(): BackgroundAuth {
       publishableKey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
     },
     chrome.storage.local,
+    chrome.identity,
   );
   return backgroundAuth;
 }
@@ -565,6 +829,11 @@ export async function handleAuthRuntimeMessage(
       return {
         type: request.type,
         result: await auth.signIn(request.email, request.password),
+      };
+    case "AUTH_SIGN_IN_WITH_GOOGLE":
+      return {
+        type: request.type,
+        result: await auth.signInWithGoogle(),
       };
     case "AUTH_SIGN_OUT":
       return { type: request.type, result: await auth.signOut() };
@@ -656,6 +925,8 @@ export function isAuthRuntimeRequest(
         typeof request.email === "string" &&
         typeof request.password === "string"
       );
+    case "AUTH_SIGN_IN_WITH_GOOGLE":
+      return true;
     default:
       return false;
   }

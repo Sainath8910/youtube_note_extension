@@ -66,6 +66,31 @@ access restrictions. The extension does not declare a higher
 `minimum_chrome_version`, so its other Manifest V3 features retain their
 existing browser support range.
 
+### Google sign-in configuration
+
+Google sign-in uses the background service worker, Chrome's
+`chrome.identity.launchWebAuthFlow()`, and Supabase's PKCE authorization-code
+flow. Configure each redirect in the system that receives it:
+
+1. In Google Cloud Console, create a **Web application** OAuth client. Add the
+   Supabase project's callback URL as an authorized redirect URI:
+   `https://<project-ref>.supabase.co/auth/v1/callback`. This is Google's
+   redirect back to Supabase, not the final extension callback.
+2. In Supabase Dashboard, enable the Google provider and enter that Google
+   OAuth client ID and client secret. Under Authentication URL Configuration,
+   add the extension redirect URL to the allowed redirect URLs.
+3. The extension callback is generated for the installed extension by
+   `chrome.identity.getRedirectURL()`, normally
+   `https://<extension-id>.chromiumapp.org/`. Obtain the exact value for your
+   installation from the extension service worker DevTools console by running
+   `chrome.identity.getRedirectURL()`, then add that exact URL (including any
+   path) to the Supabase allowed redirect URLs. The manifest's `identity`
+   permission is required for this flow.
+
+The extension uses the public Supabase URL and publishable key only. Keep the
+Google client secret in Supabase Dashboard; never add it to extension source or
+Vite environment variables.
+
 The Vite development page previews the dashboard shell. Loading personal notes
 requires the page to be opened in the browser extension so it can communicate
 with the extension background service. The build emits the dashboard page,

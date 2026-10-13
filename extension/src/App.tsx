@@ -130,6 +130,29 @@ function AuthForm({
           <span>Your account is securely managed by Supabase.</span>
         </div>
 
+        <button
+          className="auth-google-button"
+          type="button"
+          disabled={pending}
+          onClick={() => void authFlow.signInWithGoogle()}
+        >
+          {pending && state.pending === "google_sign_in" ? (
+            <>
+              <LoaderCircle className="auth-spinner" size={17} aria-hidden="true" />
+              Continuing with Google…
+            </>
+          ) : (
+            <>
+              <span className="auth-google-mark" aria-hidden="true">G</span>
+              Continue with Google
+            </>
+          )}
+        </button>
+
+        <div className="auth-divider" aria-hidden="true">
+          <span>or continue with email</span>
+        </div>
+
         {state.message && (
           <>
             <p

@@ -30,7 +30,7 @@ function statusResponse(authenticated: boolean): AuthRuntimeResponse {
 }
 
 function mutationResponse(
-  type: "AUTH_SIGN_IN" | "AUTH_SIGN_UP",
+  type: "AUTH_SIGN_IN" | "AUTH_SIGN_UP" | "AUTH_SIGN_IN_WITH_GOOGLE",
   requiresEmailConfirmation = false,
 ): AuthRuntimeResponse {
   return {
@@ -43,7 +43,12 @@ function mutationResponse(
 }
 
 function failureResponse(
-  type: "AUTH_SIGN_IN" | "AUTH_SIGN_UP" | "AUTH_SIGN_OUT" | "AUTH_GET_STATUS",
+  type:
+    | "AUTH_SIGN_IN"
+    | "AUTH_SIGN_UP"
+    | "AUTH_SIGN_IN_WITH_GOOGLE"
+    | "AUTH_SIGN_OUT"
+    | "AUTH_GET_STATUS",
 ): AuthRuntimeResponse {
   return {
     type,
@@ -130,6 +135,91 @@ describe("dashboard authentication flow", () => {
     });
     expect(calls.map((request) => request.type)).toEqual([
       "AUTH_SIGN_IN",
+      "AUTH_GET_STATUS",
+    ]);
+  });
+
+  it("completes Google sign-in only after verifying the Supabase session", async () => {
+    const { send, calls } = createSender([
+      mutationResponse("AUTH_SIGN_IN_WITH_GOOGLE"),
+      statusResponse(true),
+    ]);
+    const flow = createAuthFlow(send);
+
+    await flow.signInWithGoogle();
+
+    expect(flow.getSnapshot()).toEqual({
+      status: "signed_in",
+      pending: null,
+      user,
+    });
+    expect(calls.map((request) => request.type)).toEqual([
+      "AUTH_SIGN_IN_WITH_GOOGLE",
+      "AUTH_GET_STATUS",
+    ]);
+  });
+
+  it("shows a sanitized cancellation message and permits retry", async () => {
+    const { send, calls } = createSender([
+      {
+        type: "AUTH_SIGN_IN_WITH_GOOGLE",
+        result: {
+          success: false,
+          error: {
+            code: "AUTH_REQUEST_FAILED",
+            message: "safe background error",
+            diagnosticCode: "AUTH_OAUTH_CANCELLED",
+          },
+        },
+      },
+      mutationResponse("AUTH_SIGN_IN_WITH_GOOGLE"),
+      statusResponse(true),
+    ]);
+    const flow = createAuthFlow(send);
+
+    await flow.signInWithGoogle();
+    expect(flow.getSnapshot()).toMatchObject({
+      status: "signed_out",
+      pending: null,
+      message: "Google sign-in was cancelled.",
+      diagnosticCode: "AUTH_OAUTH_CANCELLED",
+    });
+
+    await flow.signInWithGoogle();
+    expect(flow.getSnapshot().status).toBe("signed_in");
+    expect(calls.map((request) => request.type)).toEqual([
+      "AUTH_SIGN_IN_WITH_GOOGLE",
+      "AUTH_SIGN_IN_WITH_GOOGLE",
+      "AUTH_GET_STATUS",
+    ]);
+  });
+
+  it("prevents duplicate Google sign-in attempts while OAuth is pending", async () => {
+    let resolveGoogle!: (response: AuthRuntimeResponse) => void;
+    const calls: AuthRuntimeRequest[] = [];
+    const send: AuthMessageSender = (request) => {
+      calls.push(request);
+      if (request.type === "AUTH_SIGN_IN_WITH_GOOGLE") {
+        return new Promise((resolve) => {
+          resolveGoogle = resolve;
+        });
+      }
+      return Promise.resolve(statusResponse(true));
+    };
+    const flow = createAuthFlow(send);
+
+    const first = flow.signInWithGoogle();
+    const second = flow.signInWithGoogle();
+    expect(calls).toHaveLength(1);
+    expect(flow.getSnapshot()).toMatchObject({
+      status: "signed_out",
+      pending: "google_sign_in",
+    });
+    resolveGoogle(mutationResponse("AUTH_SIGN_IN_WITH_GOOGLE"));
+    await Promise.all([first, second]);
+
+    expect(calls.map((request) => request.type)).toEqual([
+      "AUTH_SIGN_IN_WITH_GOOGLE",
       "AUTH_GET_STATUS",
     ]);
   });

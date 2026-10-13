@@ -7,7 +7,12 @@ import type {
   SafeAuthUser,
 } from "./backgroundAuth";
 
-export type AuthOperation = "sign_in" | "sign_up" | "sign_out" | null;
+export type AuthOperation =
+  | "sign_in"
+  | "sign_up"
+  | "google_sign_in"
+  | "sign_out"
+  | null;
 
 export type AuthFlowState =
   | { status: "checking"; pending: AuthOperation }
@@ -38,6 +43,7 @@ export interface AuthFlow {
   refreshStatus(): Promise<void>;
   signIn(email: string, password: string): Promise<void>;
   signUp(email: string, password: string): Promise<void>;
+  signInWithGoogle(): Promise<void>;
   signOut(): Promise<void>;
 }
 
@@ -68,6 +74,8 @@ const AUTH_DIAGNOSTIC_CODES: readonly AuthDiagnosticCode[] = [
   "AUTH_RATE_LIMITED",
   "AUTH_NETWORK_ERROR",
   "AUTH_SERVER_ERROR",
+  "AUTH_OAUTH_CANCELLED",
+  "AUTH_OAUTH_FAILED",
   "AUTH_NOT_CONFIGURED",
   "AUTH_UNSUPPORTED_BROWSER",
   "AUTH_STORAGE_UNAVAILABLE",
@@ -113,6 +121,10 @@ function failureMessage(
       return "Check your internet connection, then try again.";
     case "AUTH_SERVER_ERROR":
       return "The authentication service is temporarily unavailable. Try again later.";
+    case "AUTH_OAUTH_CANCELLED":
+      return "Google sign-in was cancelled.";
+    case "AUTH_OAUTH_FAILED":
+      return "Google sign-in could not be completed. Check your connection and try again.";
     case "AUTH_NOT_CONFIGURED":
       return "Authentication is not configured. Contact your extension administrator.";
     case "AUTH_UNSUPPORTED_BROWSER":
@@ -420,6 +432,84 @@ export function createAuthFlow(send: AuthMessageSender = sendAuthRuntimeMessage)
               pending: "sign_up",
               message: "Your account was created. You can sign in now.",
               messageKind: "info",
+            });
+          }
+        }
+      } finally {
+        operationInProgress = false;
+        if (version === attempt) state = { ...state, pending: null };
+        listeners.forEach((listener) => listener());
+      }
+    },
+    async signInWithGoogle() {
+      if (operationInProgress) return;
+      operationInProgress = true;
+      const attempt = ++version;
+      publish({ status: "signed_out", pending: "google_sign_in" });
+      try {
+        let result: ReturnType<typeof responseResult>;
+        try {
+          const response = await send({ type: "AUTH_SIGN_IN_WITH_GOOGLE" });
+          if (response.type !== "AUTH_SIGN_IN_WITH_GOOGLE") {
+            throw new Error("Invalid authentication response.");
+          }
+          result = responseResult(response);
+        } catch {
+          if (version === attempt) {
+            publish({
+              status: "signed_out",
+              pending: "google_sign_in",
+              message: "We couldn't reach Google sign-in. Please try again.",
+              messageKind: "error",
+              diagnosticCode: "AUTH_OAUTH_FAILED",
+            });
+          }
+          return;
+        }
+        if (!result.success) {
+          if (version === attempt) {
+            const diagnostic = safeDiagnostic(result.error);
+            publish({
+              status: "signed_out",
+              pending: "google_sign_in",
+              message: failureMessage(
+                "sign_in",
+                diagnostic.diagnosticCode,
+              ),
+              messageKind: "error",
+              ...diagnostic,
+            });
+          }
+          return;
+        }
+
+        let status: AuthStatus;
+        try {
+          status = await readStatus();
+        } catch {
+          if (version === attempt) {
+            publish({
+              status: "status_error",
+              pending: null,
+              message: "We couldn't verify your session. Check your connection and retry.",
+            });
+          }
+          return;
+        }
+        if (version === attempt) {
+          if (status.configured && status.authenticated && status.user) {
+            publish({
+              status: "signed_in",
+              pending: "google_sign_in",
+              user: status.user,
+            });
+          } else {
+            publish({
+              status: "signed_out",
+              pending: "google_sign_in",
+              message: "Google sign-in didn't create a usable session. Try again.",
+              messageKind: "error",
+              diagnosticCode: "AUTH_OAUTH_FAILED",
             });
           }
         }

@@ -29,6 +29,13 @@ const config = {
   publishableKey: "sb_publishable_test-public-key",
 };
 
+const redirectUrl = "https://extension-id.chromiumapp.org/";
+const oauthUrl = new URL("https://project.supabase.co/auth/v1/authorize");
+oauthUrl.searchParams.set("provider", "google");
+oauthUrl.searchParams.set("redirect_to", redirectUrl);
+oauthUrl.searchParams.set("code_challenge", "pkce-challenge");
+oauthUrl.searchParams.set("code_challenge_method", "s256");
+
 const user = {
   id: "supabase-user-id",
   email: "learner@example.com",
@@ -99,6 +106,19 @@ function setupClient(
       },
       error: options.authError ?? null,
     })),
+    signInWithOAuth: vi.fn(async () => ({
+      data: { provider: "google", url: oauthUrl.href, flowId: null },
+      error: null,
+    })),
+    exchangeCodeForSession: vi.fn(
+      async (): Promise<{
+        data: { user: User | null; session: Session | null };
+        error: Error | null;
+      }> => ({
+        data: { user, session: null },
+        error: null,
+      }),
+    ),
     signOut: vi.fn(async () => ({ error: options.authError ?? null })),
     refreshSession: vi.fn(async () => ({
       data: { session: options.refreshSession ?? null },
@@ -123,6 +143,10 @@ function createAuthSpies() {
       data: { user: null, requiresEmailConfirmation: false },
     })),
     signIn: vi.fn(async () => ({
+      success: true as const,
+      data: { user: null, requiresEmailConfirmation: false },
+    })),
+    signInWithGoogle: vi.fn(async () => ({
       success: true as const,
       data: { user: null, requiresEmailConfirmation: false },
     })),
@@ -154,6 +178,274 @@ describe("background Supabase authentication", () => {
       data: { configured: false, authenticated: false },
     });
     expect(createClient).not.toHaveBeenCalled();
+  });
+
+  it("generates a Google PKCE URL and exchanges a validated callback code", async () => {
+    const authClient = setupClient();
+    const { storage, values } = createStorage();
+    const identity = {
+      getRedirectURL: vi.fn(() => redirectUrl),
+      launchWebAuthFlow: vi.fn(async ({ url }: { url: string }) => {
+        expect(url).toBe(oauthUrl.href);
+        return `${redirectUrl}?code=authorization-code`;
+      }),
+    };
+    authClient.exchangeCodeForSession.mockImplementationOnce(async () => {
+      const adapter = vi.mocked(createClient).mock.calls[0][2]?.auth?.storage;
+      await adapter?.setItem(
+        "supabase.auth.token",
+        JSON.stringify({ access_token: "private-access-token" }),
+      );
+      return { data: { user, session: session() }, error: null };
+    });
+    const auth = createBackgroundAuth(config, storage, identity);
+
+    const result = await auth.signInWithGoogle();
+
+    expect(authClient.signInWithOAuth).toHaveBeenCalledWith({
+      provider: "google",
+      options: {
+        redirectTo: redirectUrl,
+        skipBrowserRedirect: true,
+      },
+    });
+    expect(identity.launchWebAuthFlow).toHaveBeenCalledWith({
+      url: oauthUrl.href,
+      interactive: true,
+    });
+    expect(authClient.exchangeCodeForSession).toHaveBeenCalledWith(
+      "authorization-code",
+    );
+    expect(values.has("supabase.auth.token")).toBe(true);
+    expect(result).toEqual({
+      success: true,
+      data: {
+        user: { id: user.id, email: user.email },
+        requiresEmailConfirmation: false,
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("private-access-token");
+    expect(JSON.stringify(result)).not.toContain("refresh-token-for-unit-test");
+  });
+
+  it("rejects an authorization URL without a PKCE challenge", async () => {
+    const authClient = setupClient();
+    const { storage } = createStorage();
+    const invalidUrl = new URL(oauthUrl);
+    invalidUrl.searchParams.delete("code_challenge");
+    const identity = {
+      getRedirectURL: vi.fn(() => redirectUrl),
+      launchWebAuthFlow: vi.fn(async () => `${redirectUrl}?code=unused`),
+    };
+    authClient.signInWithOAuth.mockResolvedValueOnce({
+      data: { provider: "google", url: invalidUrl.href, flowId: null },
+      error: null,
+    });
+    const auth = createBackgroundAuth(config, storage, identity);
+
+    const result = await auth.signInWithGoogle();
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { diagnosticCode: "AUTH_OAUTH_FAILED" },
+    });
+    expect(identity.launchWebAuthFlow).not.toHaveBeenCalled();
+    expect(authClient.exchangeCodeForSession).not.toHaveBeenCalled();
+  });
+
+  it("fails clearly when Chrome identity support is unavailable", async () => {
+    setupClient();
+    const { storage } = createStorage();
+    const auth = createBackgroundAuth(config, storage);
+
+    expect(await auth.signInWithGoogle()).toMatchObject({
+      success: false,
+      error: {
+        code: "AUTH_UNSUPPORTED_BROWSER",
+        diagnosticCode: "AUTH_UNSUPPORTED_BROWSER",
+      },
+    });
+  });
+
+  it.each([
+    ["cancelled by the user", undefined, "AUTH_OAUTH_CANCELLED"],
+    [
+      "provider denied consent",
+      `${redirectUrl}?error=access_denied&error_description=private-detail`,
+      "AUTH_OAUTH_FAILED",
+    ],
+    [
+      "callback from a different origin",
+      "https://attacker.example/?code=bad",
+      "AUTH_OAUTH_FAILED",
+    ],
+    ["callback without a code", redirectUrl, "AUTH_OAUTH_FAILED"],
+    [
+      "callback with an error and code",
+      `${redirectUrl}?error=access_denied&code=must-not-exchange`,
+      "AUTH_OAUTH_FAILED",
+    ],
+  ] as const)(
+    "safely rejects Google OAuth %s",
+    async (_label, callback, diagnosticCode) => {
+      const authClient = setupClient();
+      const { storage } = createStorage();
+      const identity = {
+        getRedirectURL: vi.fn(() => redirectUrl),
+        launchWebAuthFlow: vi.fn(async () => callback),
+      };
+      const auth = createBackgroundAuth(config, storage, identity);
+
+      const result = await auth.signInWithGoogle();
+
+      expect(result).toMatchObject({
+        success: false,
+        error: { diagnosticCode },
+      });
+      expect(authClient.exchangeCodeForSession).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).not.toContain("private-detail");
+      expect(JSON.stringify(result)).not.toContain("must-not-exchange");
+    },
+  );
+
+  it("sanitizes Chrome identity failures and code-exchange errors", async () => {
+    const authClient = setupClient();
+    const { storage } = createStorage();
+    const identity = {
+      getRedirectURL: vi.fn(() => redirectUrl),
+      launchWebAuthFlow: vi.fn(async (): Promise<string | undefined> => {
+        throw new Error("The user did not approve access.");
+      }),
+    };
+    const auth = createBackgroundAuth(config, storage, identity);
+
+    const cancelled = await auth.signInWithGoogle();
+    expect(cancelled).toMatchObject({
+      success: false,
+      error: { diagnosticCode: "AUTH_OAUTH_CANCELLED" },
+    });
+    expect(JSON.stringify(cancelled)).not.toContain("did not approve access");
+
+    identity.launchWebAuthFlow.mockResolvedValueOnce(
+      `${redirectUrl}?code=authorization-code`,
+    );
+    authClient.exchangeCodeForSession.mockResolvedValueOnce({
+      data: { user: null, session: null },
+      error: new Error("private exchange response"),
+    });
+    const exchangeFailure = await auth.signInWithGoogle();
+    expect(exchangeFailure).toMatchObject({
+      success: false,
+      error: { diagnosticCode: "AUTH_OAUTH_FAILED" },
+    });
+    expect(JSON.stringify(exchangeFailure)).not.toContain(
+      "private exchange response",
+    );
+  });
+
+  it("logs safe OAuth stages and allowlisted Supabase error details only", async () => {
+    const authClient = setupClient();
+    const { storage } = createStorage();
+    const identity = {
+      getRedirectURL: vi.fn(() => redirectUrl),
+      launchWebAuthFlow: vi.fn(async () => {
+        throw new Error(
+          "authorization-code private-access-token refresh-token-for-test",
+        );
+      }),
+    };
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const auth = createBackgroundAuth(config, storage, identity);
+
+    authClient.signInWithOAuth.mockResolvedValueOnce({
+      data: { provider: "google", url: oauthUrl.href, flowId: null },
+      error: {
+        name: "AuthApiError",
+        code: "provider_disabled",
+        status: 400,
+        message:
+          "user@example.com authorization-code private-access-token",
+      } as never,
+    });
+
+    const authorizationFailure = await auth.signInWithGoogle();
+    expect(authorizationFailure).toMatchObject({
+      success: false,
+      error: { diagnosticCode: "AUTH_OAUTH_FAILED" },
+    });
+    expect(warning).toHaveBeenLastCalledWith(
+      "[YouTube Knowledge] Google OAuth failed.",
+      {
+        stage: "authorization_request",
+        diagnosticCode: "AUTH_OAUTH_FAILED",
+        errorCode: "provider_disabled",
+        errorName: "AuthApiError",
+        httpStatus: 400,
+      },
+    );
+
+    await auth.signInWithGoogle();
+    expect(warning).toHaveBeenLastCalledWith(
+      "[YouTube Knowledge] Google OAuth failed.",
+      {
+        stage: "browser_flow",
+        diagnosticCode: "AUTH_OAUTH_FAILED",
+        errorName: "Error",
+      },
+    );
+
+    const loggedOutput = JSON.stringify(warning.mock.calls);
+    for (const secret of [
+      "user@example.com",
+      "authorization-code",
+      "private-access-token",
+      "refresh-token-for-test",
+    ]) {
+      expect(loggedOutput).not.toContain(secret);
+    }
+  });
+
+  it("logs PKCE code-exchange failures without the code or raw SDK message", async () => {
+    const authClient = setupClient();
+    const { storage } = createStorage();
+    const identity = {
+      getRedirectURL: vi.fn(() => redirectUrl),
+      launchWebAuthFlow: vi.fn(async () =>
+        `${redirectUrl}?code=private-authorization-code`,
+      ),
+    };
+    authClient.exchangeCodeForSession.mockResolvedValueOnce({
+      data: { user: null, session: null },
+      error: {
+        name: "AuthPKCECodeVerifierMissingError",
+        code: "pkce_verification_failed",
+        status: 400,
+        message: "private PKCE verifier and refresh token",
+      } as never,
+    });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const auth = createBackgroundAuth(config, storage, identity);
+
+    const result = await auth.signInWithGoogle();
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { diagnosticCode: "AUTH_OAUTH_FAILED" },
+    });
+    expect(warning).toHaveBeenCalledWith(
+      "[YouTube Knowledge] Google OAuth failed.",
+      {
+        stage: "code_exchange",
+        diagnosticCode: "AUTH_OAUTH_FAILED",
+        errorCode: "pkce_verification_failed",
+        errorName: "AuthPKCECodeVerifierMissingError",
+        httpStatus: 400,
+      },
+    );
+    const loggedOutput = JSON.stringify(warning.mock.calls);
+    expect(loggedOutput).not.toContain("private-authorization-code");
+    expect(loggedOutput).not.toContain("private PKCE verifier");
+    expect(loggedOutput).not.toContain("refresh token");
   });
 
   it("accepts publishable and legacy anon public keys", () => {
@@ -192,6 +484,7 @@ describe("background Supabase authentication", () => {
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: false,
+      flowType: "pkce",
     });
   });
 
@@ -662,6 +955,33 @@ describe("background Supabase authentication", () => {
     expect(methods.getStatus).toHaveBeenCalledTimes(1);
   });
 
+  it("dispatches Google sign-in only through the dashboard and never returns tokens", async () => {
+    const { auth, methods } = createAuthSpies();
+    const responsePromise = new Promise<unknown>((resolve) => {
+      dispatchAuthRuntimeMessage(
+        auth,
+        { type: "AUTH_SIGN_IN_WITH_GOOGLE" },
+        {
+          id: "extension-id",
+          url: "chrome-extension://extension-id/index.html#/dashboard",
+        },
+        "extension-id",
+        "chrome-extension://extension-id/index.html",
+        resolve,
+      );
+    });
+
+    const response = await responsePromise;
+    expect(response).toMatchObject({
+      type: "AUTH_SIGN_IN_WITH_GOOGLE",
+      result: { success: true },
+    });
+    expect(methods.signInWithGoogle).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(response)).not.toContain(
+      "test-token-must-not-be-returned",
+    );
+  });
+
   it.each([
     [
       "YouTube content script",
@@ -718,6 +1038,7 @@ describe("background Supabase authentication", () => {
     expect(methods.getStatus).not.toHaveBeenCalled();
     expect(methods.signUp).not.toHaveBeenCalled();
     expect(methods.signIn).not.toHaveBeenCalled();
+    expect(methods.signInWithGoogle).not.toHaveBeenCalled();
     expect(methods.signOut).not.toHaveBeenCalled();
     expect(methods.getAccessToken).not.toHaveBeenCalled();
   });
@@ -757,6 +1078,7 @@ describe("background Supabase authentication", () => {
     expect(methods.getStatus).not.toHaveBeenCalled();
     expect(methods.signUp).not.toHaveBeenCalled();
     expect(methods.signIn).not.toHaveBeenCalled();
+    expect(methods.signInWithGoogle).not.toHaveBeenCalled();
     expect(methods.signOut).not.toHaveBeenCalled();
   });
 });
