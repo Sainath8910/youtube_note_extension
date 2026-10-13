@@ -152,8 +152,6 @@ const SIDEBAR_COLORS: ThemeColors = {
   shadow: "rgba(0, 0, 0, 0.38)",
 };
 
-const POSITION_STORAGE_KEY = "youtubeKnowledgeSidebarPosition";
-
 const SIDEBAR_WIDTH = 390;
 const SIDEBAR_HEIGHT_MARGIN = 30;
 const MINIMIZED_SIZE = 46;
@@ -276,39 +274,66 @@ function getDefaultPosition(): Position {
 
 async function loadPosition(): Promise<Position> {
   return new Promise((resolve) => {
-    chrome.storage.local.get([POSITION_STORAGE_KEY], (result) => {
-      const stored = result[POSITION_STORAGE_KEY] as
-        | Partial<Position>
-        | undefined;
+    chrome.runtime.sendMessage(
+      { type: "GET_SIDEBAR_POSITION" },
+      (response: unknown) => {
+        if (
+          chrome.runtime.lastError ||
+          typeof response !== "object" ||
+          response === null ||
+          !("success" in response) ||
+          response.success !== true
+        ) {
+          resolve(getDefaultPosition());
+          return;
+        }
+        const stored =
+          "position" in response &&
+          typeof response.position === "object" &&
+          response.position !== null
+            ? response.position
+            : undefined;
+        if (
+          stored &&
+          "x" in stored &&
+          typeof stored.x === "number" &&
+          "y" in stored &&
+          typeof stored.y === "number"
+        ) {
+          resolve(
+            clampPosition(
+              {
+                x: stored.x,
+                y: stored.y,
+              },
+              SIDEBAR_WIDTH,
+              window.innerHeight - SIDEBAR_HEIGHT_MARGIN,
+            ),
+          );
+          return;
+        }
 
-      if (
-        stored &&
-        typeof stored.x === "number" &&
-        typeof stored.y === "number"
-      ) {
-        resolve(
-          clampPosition(
-            {
-              x: stored.x,
-              y: stored.y,
-            },
-            SIDEBAR_WIDTH,
-            window.innerHeight - SIDEBAR_HEIGHT_MARGIN,
-          ),
-        );
-
-        return;
-      }
-
-      resolve(getDefaultPosition());
-    });
+        resolve(getDefaultPosition());
+      },
+    );
   });
 }
 
 function savePosition(position: Position): void {
-  chrome.storage.local.set({
-    [POSITION_STORAGE_KEY]: position,
-  });
+  chrome.runtime.sendMessage(
+    { type: "SAVE_SIDEBAR_POSITION", position },
+    (response: unknown) => {
+      if (
+        chrome.runtime.lastError ||
+        typeof response !== "object" ||
+        response === null ||
+        !("success" in response) ||
+        response.success !== true
+      ) {
+        console.warn("[YouTube Knowledge] Could not save sidebar settings.");
+      }
+    },
+  );
 }
 
 function sendCreateNote(data: {

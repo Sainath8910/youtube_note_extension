@@ -13,6 +13,7 @@
   ],
   "host_permissions": [
     "http://localhost:8000/*",
+    "https://*.supabase.co/*",
     "https://www.youtube.com/*"
   ],
   "background": {

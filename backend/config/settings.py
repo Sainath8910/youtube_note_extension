@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -20,14 +21,17 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    raise ImproperlyConfigured("SECRET_KEY must be set in the environment.")
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-di7gr_6j6zj5tsd2()s=r1!cyg527@y2f*y1o9*%xjfyvqz$qe"
-
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DJANGO_ENV = os.environ.get("DJANGO_ENV", "production").strip().lower()
+DEBUG = os.environ.get("DEBUG", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 ALLOWED_HOSTS = ["localhost",
     "127.0.0.1",
@@ -106,11 +110,11 @@ KNOWLEDGE_PREVIOUS_CONTEXT_KAFKA_GROUP = os.environ.get(
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": "youtube_knowledge",
-        "USER": "youtube_user",
-        "PASSWORD": "youtube_password",
-        "HOST": "localhost",
-        "PORT": "5432",
+        "NAME": os.environ.get("DB_NAME", "youtube_knowledge"),
+        "USER": os.environ.get("DB_USER", "youtube_user"),
+        "PASSWORD": os.environ.get("DB_PASSWORD", ""),
+        "HOST": os.environ.get("DB_HOST", "localhost"),
+        "PORT": os.environ.get("DB_PORT", "5432"),
     }
 }
 
@@ -165,10 +169,23 @@ AUTH_USER_MODEL = "users.User"
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
+        "users.authentication.SupabaseJWTAuthentication",
         "users.authentication.DevHeaderAuthentication",
-        "rest_framework.authentication.SessionAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
 }
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_JWT_AUDIENCE = os.environ.get(
+    "SUPABASE_JWT_AUDIENCE",
+    "authenticated",
+)
+SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
+ENABLE_DEV_HEADER_AUTH = (
+    DEBUG
+    and DJANGO_ENV == "development"
+    and os.environ.get("ENABLE_DEV_HEADER_AUTH", "false").strip().lower()
+    in {"1", "true", "yes", "on"}
+)

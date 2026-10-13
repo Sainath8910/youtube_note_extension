@@ -1,3 +1,22 @@
+import {
+  dispatchAuthRuntimeMessage,
+  getBackgroundAuth,
+} from "./backgroundAuth";
+import { fetchDjangoApi } from "./djangoApiRequest";
+
+const backgroundAuth = getBackgroundAuth();
+const fetchDjangoApiWithAuth = fetchDjangoApi(() =>
+  backgroundAuth.getAccessToken(),
+);
+void backgroundAuth.initialize().then((result) => {
+  if (!result.success) {
+    console.warn(
+      "[YouTube Knowledge] Supabase session restoration failed:",
+      result.error.code,
+    );
+  }
+});
+
 chrome.action.onClicked.addListener(() => {
   const dashboardPageUrl = chrome.runtime.getURL("index.html");
   const dashboardUrl = `${dashboardPageUrl}#/dashboard`;
@@ -120,6 +139,15 @@ function getWatchVideoId(value: string | undefined): string | null {
       return null;
     }
     return url.searchParams.get("v");
+  } catch {
+    return null;
+  }
+}
+
+function parseSenderUrl(value: string | undefined): URL | null {
+  if (!value) return null;
+  try {
+    return new URL(value);
   } catch {
     return null;
   }
@@ -261,13 +289,12 @@ async function respondToConversationRequest(
   data?: unknown,
 ): Promise<void> {
   try {
-    const response = await fetch(
+    const response = await fetchDjangoApiWithAuth(
       `http://localhost:8000/api/knowledge/conversations/${path}`,
       {
         method,
         headers: {
           "Content-Type": "application/json",
-          "X-Dev-User": "devuser",
         },
         ...(data === undefined ? {} : { body: JSON.stringify(data) }),
       },
@@ -310,13 +337,12 @@ async function respondToFolderRequest(
   data?: unknown,
 ): Promise<void> {
   try {
-    const response = await fetch(
+    const response = await fetchDjangoApiWithAuth(
       `http://localhost:8000/api/folders/${path}`,
       {
         method,
         headers: {
           "Content-Type": "application/json",
-          "X-Dev-User": "devuser",
         },
         ...(data === undefined ? {} : { body: JSON.stringify(data) }),
       },
@@ -351,6 +377,77 @@ async function respondToFolderRequest(
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (
+    dispatchAuthRuntimeMessage(
+      backgroundAuth,
+      message,
+      sender,
+      chrome.runtime.id,
+      chrome.runtime.getURL("index.html"),
+      sendResponse,
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    message?.type === "GET_SIDEBAR_POSITION" ||
+    message?.type === "SAVE_SIDEBAR_POSITION"
+  ) {
+    const senderUrl = parseSenderUrl(sender.url);
+    if (
+      sender.id !== chrome.runtime.id ||
+      !sender.tab ||
+      !senderUrl ||
+      !["youtube.com", "www.youtube.com"].includes(senderUrl.hostname) ||
+      senderUrl.pathname !== "/watch"
+    ) {
+      sendResponse({ success: false, error: "Request is not allowed." });
+      return true;
+    }
+    if (message.type === "GET_SIDEBAR_POSITION") {
+      chrome.storage.local.get(
+        "youtubeKnowledgeSidebarPosition",
+        (result) => {
+          const error = chrome.runtime.lastError;
+          if (error) {
+            sendResponse({ success: false, error: "Could not read sidebar settings." });
+            return;
+          }
+          sendResponse({
+            success: true,
+            position: result.youtubeKnowledgeSidebarPosition,
+          });
+        },
+      );
+      return true;
+    }
+    const position = message.position;
+    if (
+      !position ||
+      typeof position !== "object" ||
+      typeof position.x !== "number" ||
+      !Number.isFinite(position.x) ||
+      typeof position.y !== "number" ||
+      !Number.isFinite(position.y)
+    ) {
+      sendResponse({ success: false, error: "Sidebar position is invalid." });
+      return;
+    }
+    chrome.storage.local.set(
+      { youtubeKnowledgeSidebarPosition: { x: position.x, y: position.y } },
+      () => {
+        const error = chrome.runtime.lastError;
+        sendResponse(
+          error
+            ? { success: false, error: "Could not save sidebar settings." }
+            : { success: true },
+        );
+      },
+    );
+    return true;
+  }
+
   if (message.type === "CAPTURE_VIDEO_SCREENSHOT") {
     if (!isScreenshotCaptureRequest(message)) {
       sendResponse({
@@ -509,13 +606,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    fetch(
+    fetchDjangoApiWithAuth(
       `http://localhost:8000/api/notes/${encodeURIComponent(String(noteId))}/assistance/`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Dev-User": "devuser",
         },
         body: JSON.stringify({
           operation: message.operation,
@@ -665,11 +761,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    fetch("http://localhost:8000/api/knowledge/ask/", {
+    fetchDjangoApiWithAuth("http://localhost:8000/api/knowledge/ask/", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Dev-User": "devuser",
       },
       body: JSON.stringify({
         question,
@@ -719,11 +814,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    fetch("http://localhost:8000/api/knowledge/previous-context/jobs/", {
+    fetchDjangoApiWithAuth("http://localhost:8000/api/knowledge/previous-context/jobs/", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Dev-User": "devuser",
       },
       body: JSON.stringify({ youtube_id: videoId }),
     })
@@ -771,12 +865,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    fetch(
+    fetchDjangoApiWithAuth(
       `http://localhost:8000/api/knowledge/previous-context/jobs/${encodeURIComponent(jobId)}/`,
       {
         method: "GET",
         headers: {
-          "X-Dev-User": "devuser",
         },
       },
     )
@@ -817,10 +910,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
    * --------------------------------------------------
    */
   if (message.type === "GET_NOTES") {
-    fetch("http://localhost:8000/api/notes/", {
+    fetchDjangoApiWithAuth("http://localhost:8000/api/notes/", {
       method: "GET",
       headers: {
-        "X-Dev-User": "devuser",
       },
     })
       .then(async (response) => {
@@ -878,10 +970,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    fetch(`http://localhost:8000/api/videos/${videoId}/`, {
+    fetchDjangoApiWithAuth(`http://localhost:8000/api/videos/${videoId}/`, {
       method: "GET",
       headers: {
-        "X-Dev-User": "devuser",
       },
     })
       .then(async (response) => {
@@ -928,13 +1019,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    fetch(
+    fetchDjangoApiWithAuth(
       `http://localhost:8000/api/videos/${encodeURIComponent(videoId)}/analyze/`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Dev-User": "devuser",
         },
         body: JSON.stringify({}),
       },
@@ -999,13 +1089,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    fetch(
+    fetchDjangoApiWithAuth(
       `http://localhost:8000/api/videos/${encodeURIComponent(videoId)}/transcript/`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Dev-User": "devuser",
         },
         body: JSON.stringify({}),
       },
@@ -1087,11 +1176,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    fetch("http://localhost:8000/api/notes/", {
+    fetchDjangoApiWithAuth("http://localhost:8000/api/notes/", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Dev-User": "devuser",
       },
       body: JSON.stringify({
         title: note.title.trim(),
@@ -1169,11 +1257,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    fetch("http://localhost:8000/api/notes/video/", {
+    fetchDjangoApiWithAuth("http://localhost:8000/api/notes/video/", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Dev-User": "devuser",
       },
       body: JSON.stringify({
         youtube_id: note.youtube_id,
@@ -1243,11 +1330,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    fetch(`http://localhost:8000/api/notes/${noteId}/`, {
+    fetchDjangoApiWithAuth(`http://localhost:8000/api/notes/${noteId}/`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
-        "X-Dev-User": "devuser",
       },
       body: JSON.stringify(note),
     })
@@ -1293,10 +1379,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    fetch(`http://localhost:8000/api/notes/${noteId}/`, {
+    fetchDjangoApiWithAuth(`http://localhost:8000/api/notes/${noteId}/`, {
       method: "DELETE",
       headers: {
-        "X-Dev-User": "devuser",
       },
     })
       .then(async (response) => {

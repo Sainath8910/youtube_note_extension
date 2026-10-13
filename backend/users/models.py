@@ -3,4 +3,8 @@ from django.db import models
 
 
 class User(AbstractUser):
-    pass
+    supabase_uid = models.UUIDField(
+        null=True,
+        blank=True,
+        unique=True,
+    )

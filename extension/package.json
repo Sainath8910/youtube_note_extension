@@ -7,9 +7,11 @@
     "dev": "vite",
     "build": "tsc -b && vite build && vite build --config vite.content.config.ts && vite build --config vite.background.config.ts",
     "lint": "eslint .",
+    "test": "vitest run",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.117.3",
     "jspdf": "^4.2.1",
     "lucide-react": "^1.52.0",
     "react": "^19.3.0",
@@ -28,6 +30,7 @@
     "globals": "^17.12.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.69.0",
-    "vite": "^8.3.0"
+    "vite": "^8.3.0",
+    "vitest": "^5.0.4"
   }
 }

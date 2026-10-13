@@ -21,6 +21,7 @@ from django.contrib.auth import views as auth_views
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("api/users/", include("users.urls")),
     path("api/folders/", include("folders.urls")),
     path("api/notes/",include("notes.urls")),
     path("api/videos/",include("videos.urls")),

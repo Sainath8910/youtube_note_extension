@@ -35,6 +35,7 @@ import {
   Sparkles,
   Lightbulb,
   ListChecks,
+  LogOut,
   Route,
   Tags,
   Trash2,
@@ -67,7 +68,10 @@ import {
   type DashboardFolderPathItem,
   type DashboardNote,
   type DashboardVideoContext as DashboardVideoDetails,
+  invalidateDashboardDataRequest,
+  isDashboardRequestCurrent,
 } from "./dashboardApi";
+import type { SafeAuthUser } from "./backgroundAuth";
 import {
   createDashboardFolder,
   deleteDashboardFolder,
@@ -218,7 +222,17 @@ function isKnownDashboardHash(hash: string): boolean {
   );
 }
 
-function Dashboard() {
+function Dashboard({
+  authenticatedUser,
+  onSignOut,
+  signingOut,
+  signOutError,
+}: {
+  authenticatedUser: SafeAuthUser;
+  onSignOut: () => void;
+  signingOut: boolean;
+  signOutError?: string;
+}) {
   const [location, setLocation] = useState<DashboardLocation>(locationFromHash);
   const route = location.route;
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
@@ -237,6 +251,14 @@ function Dashboard() {
     status: "loading",
   });
   const previousRoute = useRef(route);
+
+  useEffect(
+    () => () => {
+      dashboardRequestVersion.current += 1;
+      invalidateDashboardDataRequest();
+    },
+    [],
+  );
 
   useEffect(() => {
     const handleRouteChange = () => {
@@ -295,7 +317,13 @@ function Dashboard() {
 
     loadDashboardData()
       .then((data) => {
-        if (active && requestVersion === dashboardRequestVersion.current) {
+        if (
+          isDashboardRequestCurrent(
+            active,
+            requestVersion,
+            dashboardRequestVersion.current,
+          )
+        ) {
           const mergedData = [...savedNoteOverridesRef.current.values()].reduce(
             (currentData, savedNote) =>
               upsertDashboardNote(currentData, savedNote),
@@ -305,7 +333,13 @@ function Dashboard() {
         }
       })
       .catch((error: unknown) => {
-        if (!active || requestVersion !== dashboardRequestVersion.current) {
+        if (
+          !isDashboardRequestCurrent(
+            active,
+            requestVersion,
+            dashboardRequestVersion.current,
+          )
+        ) {
           return;
         }
         setDashboardState({
@@ -498,6 +532,10 @@ function Dashboard() {
           onMenuClick={toggleMobileNavigation}
           menuExpanded={mobileNavigationOpen}
           menuButtonRef={menuButtonRef}
+          authenticatedUser={authenticatedUser}
+          onSignOut={onSignOut}
+          signingOut={signingOut}
+          signOutError={signOutError}
         />
 
         <main className="dashboard-content">
@@ -644,6 +682,10 @@ interface DashboardHeaderProps {
   onMenuClick: () => void;
   menuExpanded: boolean;
   menuButtonRef: Ref<HTMLButtonElement>;
+  authenticatedUser: SafeAuthUser;
+  onSignOut: () => void;
+  signingOut: boolean;
+  signOutError?: string;
 }
 
 function DashboardHeader({
@@ -651,6 +693,10 @@ function DashboardHeader({
   onMenuClick,
   menuExpanded,
   menuButtonRef,
+  authenticatedUser,
+  onSignOut,
+  signingOut,
+  signOutError,
 }: DashboardHeaderProps) {
   return (
     <header className="dashboard-topbar">
@@ -670,10 +716,26 @@ function DashboardHeader({
         )}
       </button>
       <div className="topbar-title">{title}</div>
-      <span className="workspace-indicator">
-        <span className="connection-dot" aria-hidden="true" />
-        Extension workspace
-      </span>
+      <div className="dashboard-account">
+        <div className="dashboard-account-copy">
+          <span className="connection-dot" aria-hidden="true" />
+          <span>{authenticatedUser.email ?? "Signed in"}</span>
+        </div>
+        <button
+          className="dashboard-signout-button"
+          type="button"
+          onClick={onSignOut}
+          disabled={signingOut}
+        >
+          <LogOut size={15} aria-hidden="true" />
+          {signingOut ? "Signing out…" : "Sign out"}
+        </button>
+        {signOutError && (
+          <span className="dashboard-signout-error" role="alert">
+            {signOutError}
+          </span>
+        )}
+      </div>
     </header>
   );
 }

@@ -229,6 +229,67 @@
   height: 6px;
 }
 
+.dashboard-account {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.dashboard-account-copy {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: #a2afc0;
+  font-size: 11px;
+}
+
+.dashboard-account-copy > span:last-child {
+  overflow: hidden;
+  max-width: min(28vw, 240px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-signout-button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 10px;
+  color: #b8c5d3;
+  background: rgba(148, 163, 184, 0.06);
+  border: 1px solid #2a394d;
+  border-radius: 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.dashboard-signout-button:hover:not(:disabled) {
+  color: #f3f8fc;
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.dashboard-signout-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.dashboard-signout-error {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: clamp(24px, 4vw, 60px);
+  max-width: min(360px, 80vw);
+  padding: 9px 11px;
+  color: #fecaca;
+  background: #331c25;
+  border: 1px solid rgba(248, 113, 113, 0.25);
+  border-radius: 8px;
+  font-size: 11px;
+}
+
 .mobile-menu-button {
   display: none;
   align-items: center;
@@ -1727,7 +1788,7 @@
     display: inline-flex;
   }
 
-  .workspace-indicator {
+  .dashboard-account {
     margin-left: auto;
   }
 
@@ -1737,6 +1798,27 @@
 
   .dashboard-columns {
     grid-template-columns: minmax(0, 1.1fr) minmax(240px, 0.9fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .dashboard-topbar {
+    gap: 8px;
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .dashboard-account {
+    gap: 7px;
+  }
+
+  .dashboard-account-copy > span:last-child {
+    max-width: 90px;
+  }
+
+  .dashboard-signout-button {
+    gap: 5px;
+    padding: 0 8px;
   }
 }
 

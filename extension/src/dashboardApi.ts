@@ -50,6 +50,18 @@ export interface DashboardVideoContext {
 
 let inFlightDashboardRequest: Promise<DashboardData> | null = null;
 
+export function invalidateDashboardDataRequest(): void {
+  inFlightDashboardRequest = null;
+}
+
+export function isDashboardRequestCurrent(
+  active: boolean,
+  requestVersion: number,
+  currentVersion: number,
+): boolean {
+  return active && requestVersion === currentVersion;
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

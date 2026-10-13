@@ -7,6 +7,7 @@ psycopg[binary]>=3.3,<4
 google-genai>=1.0,<2
 huggingface_hub>=1.0,<3
 python-dotenv>=1.2,<2
+PyJWT[crypto]>=2.10,<3
 yt-dlp>=2025.1.1
 youtube-transcript-api>=1.2,<2
 confluent-kafka>=2.3.0

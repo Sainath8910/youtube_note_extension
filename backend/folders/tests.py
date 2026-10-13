@@ -467,7 +467,7 @@ class FolderSearchTests(TestCase):
 
         response = self.client.get("/api/folders/search/", {"q": "java"})
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 401)
 
     def test_search_results_have_deterministic_name_order(self):
         first_response = self.search("java")
