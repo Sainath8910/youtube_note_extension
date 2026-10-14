@@ -47,7 +47,9 @@ import {
 import {
   createEmptyDocument,
   documentToPlainText,
+  getChecklistItems,
   getListItems,
+  getTableRows,
   hasMeaningfulBlockContent,
   normalizeListContent,
   normalizeDocument,
@@ -55,9 +57,11 @@ import {
   type NoteBlock,
   type NoteBlockType,
   type NoteDocument,
+  type ChecklistItem,
   type VideoNote,
 } from "./noteDocument";
 import { CopyButton } from "./CopyButton";
+import { getDashboardProfile } from "./profileApi";
 import {
   captureCurrentVideoScreenshot,
   isCurrentVideoPlayerAvailable,
@@ -952,6 +956,60 @@ export function BlockEditor({
     );
   }
 
+  function promptTableRows(): string[][] | null {
+    const rowInput = window.prompt("How many rows? (1-20)", "2");
+    if (rowInput === null) return null;
+    const rowCount = Number(rowInput);
+    if (!Number.isInteger(rowCount) || rowCount < 1 || rowCount > 20) {
+      window.alert("Enter a whole number of rows from 1 to 20.");
+      return null;
+    }
+    const columnInput = window.prompt("How many columns? (1-12)", "2");
+    if (columnInput === null) return null;
+    const columnCount = Number(columnInput);
+    if (
+      !Number.isInteger(columnCount) ||
+      columnCount < 1 ||
+      columnCount > 12
+    ) {
+      window.alert("Enter a whole number of columns from 1 to 12.");
+      return null;
+    }
+    return Array.from({ length: rowCount }, () =>
+      Array.from({ length: columnCount }, () => ""),
+    );
+  }
+
+  function addTableBlock(afterId?: string) {
+    const rows = promptTableRows();
+    if (!rows) return;
+    insertBlock(
+      {
+        id: createId(),
+        type: "table",
+        content: "",
+        metadata: { table_rows: rows },
+      },
+      afterId,
+    );
+  }
+
+  function addChecklistBlock(afterId?: string) {
+    insertBlock(
+      {
+        id: createId(),
+        type: "checklist",
+        content: "",
+        metadata: {
+          checklist_items: [
+            { id: createId(), text: "", checked: false } satisfies ChecklistItem,
+          ],
+        },
+      },
+      afterId,
+    );
+  }
+
   async function captureScreenshot(afterId?: string) {
     if (!onCaptureScreenshot || isCapturingScreenshot) return;
     setIsCapturingScreenshot(true);
@@ -1260,11 +1318,35 @@ export function BlockEditor({
                 <select
                   value={block.type}
                   aria-label={`Block type for block ${index + 1}`}
-                  onChange={(event) =>
-                    updateBlock(block.id, {
-                      type: event.target.value as NoteBlockType,
-                    })
-                  }
+                  onChange={(event) => {
+                    const type = event.target.value as NoteBlockType;
+                    if (type === "table") {
+                      const rows = promptTableRows();
+                      if (rows) {
+                        updateBlock(block.id, {
+                          type,
+                          content: "",
+                          metadata: {
+                            ...block.metadata,
+                            table_rows: rows,
+                          },
+                        });
+                      }
+                    } else if (type === "checklist") {
+                      updateBlock(block.id, {
+                        type,
+                        content: "",
+                        metadata: {
+                          ...block.metadata,
+                          checklist_items: [
+                            { id: createId(), text: "", checked: false },
+                          ],
+                        },
+                      });
+                    } else {
+                      updateBlock(block.id, { type });
+                    }
+                  }}
                   style={{
                     ...editorControlStyle,
                     color: colors.muted,
@@ -1279,6 +1361,10 @@ export function BlockEditor({
                   <option value="bullet_list">Bulleted Points</option>
 
                   <option value="numbered_list">Numbered Points</option>
+
+                  <option value="table">Table</option>
+
+                  <option value="checklist">Checklist</option>
 
                   <option value="code">Code</option>
 
@@ -1686,6 +1772,243 @@ export function BlockEditor({
                   borderColor: colors.border,
                 }}
               />
+            ) : block.type === "table" ? (
+              <div style={{ display: "grid", gap: 8 }}>
+                <div style={{ overflowX: "auto" }}>
+                  <table
+                    style={{
+                      width: "100%",
+                      borderCollapse: "collapse",
+                      tableLayout: "fixed",
+                    }}
+                  >
+                    <tbody>
+                      {getTableRows(block).map((row, rowIndex) => (
+                        <tr key={`${block.id}-row-${rowIndex}`}>
+                          {row.map((cell, columnIndex) => (
+                            <td
+                              key={`${block.id}-${rowIndex}-${columnIndex}`}
+                              style={{
+                                padding: 3,
+                                border: `1px solid ${colors.border}`,
+                              }}
+                            >
+                              <input
+                                value={cell}
+                                aria-label={`Table block ${index + 1}, row ${rowIndex + 1}, column ${columnIndex + 1}`}
+                                onChange={(event) => {
+                                  const rows = getTableRows(block).map(
+                                    (currentRow) => [...currentRow],
+                                  );
+                                  rows[rowIndex][columnIndex] = event.target.value;
+                                  updateBlock(block.id, {
+                                    metadata: {
+                                      ...block.metadata,
+                                      table_rows: rows,
+                                    },
+                                  });
+                                }}
+                                style={{
+                                  ...editorInputStyle,
+                                  width: "100%",
+                                  minWidth: 72,
+                                  boxSizing: "border-box",
+                                  color: colors.primaryText,
+                                  background: colors.input,
+                                  borderColor: colors.border,
+                                }}
+                              />
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    disabled={getTableRows(block).length >= 20}
+                    onClick={() => {
+                      const rows = getTableRows(block);
+                      const columnCount = rows[0]?.length ?? 1;
+                      updateBlock(block.id, {
+                        metadata: {
+                          ...block.metadata,
+                          table_rows: [
+                            ...rows,
+                            Array.from({ length: columnCount }, () => ""),
+                          ],
+                        },
+                      });
+                    }}
+                    style={{
+                      ...smallToolButton,
+                      color: colors.muted,
+                      borderColor: colors.border,
+                      opacity: getTableRows(block).length >= 20 ? 0.5 : 1,
+                    }}
+                  >
+                    + Add row
+                  </button>
+                  <button
+                    type="button"
+                    disabled={(getTableRows(block)[0]?.length ?? 0) >= 12}
+                    onClick={() => {
+                      const rows = getTableRows(block).map((row) => [
+                        ...row,
+                        "",
+                      ]);
+                      updateBlock(block.id, {
+                        metadata: {
+                          ...block.metadata,
+                          table_rows: rows,
+                        },
+                      });
+                    }}
+                    style={{
+                      ...smallToolButton,
+                      color: colors.muted,
+                      borderColor: colors.border,
+                      opacity:
+                        (getTableRows(block)[0]?.length ?? 0) >= 12 ? 0.5 : 1,
+                    }}
+                  >
+                    + Add column
+                  </button>
+                </div>
+              </div>
+            ) : block.type === "checklist" ? (
+              <div style={{ display: "grid", gap: 7 }}>
+                {getChecklistItems(block).map((item, itemIndex) => (
+                  <label
+                    key={item.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      minWidth: 0,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      role="checkbox"
+                      aria-checked={item.checked}
+                      aria-label={`Checklist item ${itemIndex + 1} completed`}
+                      onClick={() => {
+                        const items = getChecklistItems(block).map(
+                          (currentItem) =>
+                            currentItem.id === item.id
+                              ? { ...currentItem, checked: !currentItem.checked }
+                              : currentItem,
+                        );
+                        updateBlock(block.id, {
+                          metadata: {
+                            ...block.metadata,
+                            checklist_items: items,
+                          },
+                        });
+                      }}
+                      style={{
+                        display: "inline-grid",
+                        width: 18,
+                        height: 18,
+                        flex: "0 0 18px",
+                        margin: 0,
+                        padding: 0,
+                        placeItems: "center",
+                        border: `1px solid ${item.checked ? colors.accent : colors.muted}`,
+                        borderRadius: "50%",
+                        color: colors.panel,
+                        background: item.checked ? colors.accent : "transparent",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {item.checked && <Check size={12} aria-hidden="true" />}
+                    </button>
+                    <input
+                      value={item.text}
+                      aria-label={`Checklist item ${itemIndex + 1}`}
+                      onChange={(event) => {
+                        const items = getChecklistItems(block).map(
+                          (currentItem) =>
+                            currentItem.id === item.id
+                              ? { ...currentItem, text: event.target.value }
+                              : currentItem,
+                        );
+                        updateBlock(block.id, {
+                          metadata: {
+                            ...block.metadata,
+                            checklist_items: items,
+                          },
+                        });
+                      }}
+                      placeholder="Checklist item"
+                      style={{
+                        ...editorInputStyle,
+                        flex: 1,
+                        width: "auto",
+                        minWidth: 0,
+                        minHeight: 34,
+                        boxSizing: "border-box",
+                        padding: "6px 8px",
+                        fontSize: 13,
+                        color: colors.primaryText,
+                        background: colors.input,
+                        borderColor: colors.border,
+                        textDecoration: item.checked ? "line-through" : "none",
+                        opacity: item.checked ? 0.7 : 1,
+                      }}
+                    />
+                    <button
+                      type="button"
+                      title={`Remove checklist item ${itemIndex + 1}`}
+                      aria-label={`Remove checklist item ${itemIndex + 1}`}
+                      onClick={() => {
+                        const items = getChecklistItems(block).filter(
+                          (currentItem) => currentItem.id !== item.id,
+                        );
+                        updateBlock(block.id, {
+                          metadata: {
+                            ...block.metadata,
+                            checklist_items: items,
+                          },
+                        });
+                      }}
+                      style={{
+                        ...iconButtonStyle,
+                        color: colors.muted,
+                        borderColor: colors.border,
+                      }}
+                    >
+                      <X size={13} aria-hidden="true" />
+                    </button>
+                  </label>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const items = getChecklistItems(block);
+                    updateBlock(block.id, {
+                      metadata: {
+                        ...block.metadata,
+                        checklist_items: [
+                          ...items,
+                          { id: createId(), text: "", checked: false },
+                        ],
+                      },
+                    });
+                  }}
+                  style={{
+                    ...smallToolButton,
+                    justifySelf: "start",
+                    color: colors.muted,
+                    borderColor: colors.border,
+                  }}
+                >
+                  + Add item
+                </button>
+              </div>
             ) : (
               <textarea
                 value={block.content}
@@ -1770,6 +2093,30 @@ export function BlockEditor({
                 }}
               >
                 + Numbers
+              </button>
+
+              <button
+                type="button"
+                onClick={() => addTableBlock(block.id)}
+                style={{
+                  ...smallToolButton,
+                  color: colors.muted,
+                  borderColor: colors.border,
+                }}
+              >
+                + Table
+              </button>
+
+              <button
+                type="button"
+                onClick={() => addChecklistBlock(block.id)}
+                style={{
+                  ...smallToolButton,
+                  color: colors.muted,
+                  borderColor: colors.border,
+                }}
+              >
+                + Checklist
               </button>
 
               <button
@@ -1930,6 +2277,12 @@ interface NoteReaderProps {
   showFolderPath?: boolean;
   enableTimestampJump?: boolean;
   onTimestampClick?: (seconds: number) => void;
+  onChecklistItemToggle?: (
+    blockId: string,
+    itemId: string,
+    checked: boolean,
+  ) => void;
+  checklistToggleDisabled?: boolean;
 }
 
 export function NoteReader({
@@ -1939,6 +2292,8 @@ export function NoteReader({
   showFolderPath = false,
   enableTimestampJump = true,
   onTimestampClick,
+  onChecklistItemToggle,
+  checklistToggleDisabled = false,
 }: NoteReaderProps) {
   const noteDocument = normalizeDocument(note);
 
@@ -2317,6 +2672,121 @@ export function NoteReader({
                   <li>Empty list</li>
                 )}
               </Element>
+            );
+          }
+
+          if (block.type === "table") {
+            const rows = getTableRows(block);
+            return (
+              <div
+                key={block.id}
+                style={{
+                  maxWidth: "100%",
+                  overflowX: "auto",
+                  border: `1px solid ${colors.border}`,
+                  borderRadius: 8,
+                }}
+              >
+                <table
+                  style={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    color: colors.text,
+                    fontSize: 13,
+                  }}
+                >
+                  <tbody>
+                    {rows.map((row, rowIndex) => (
+                      <tr key={`${block.id}-row-${rowIndex}`}>
+                        {row.map((cell, columnIndex) => (
+                          <td
+                            key={`${block.id}-${rowIndex}-${columnIndex}`}
+                            style={{
+                              minWidth: 70,
+                              padding: "8px 10px",
+                              border: `1px solid ${colors.border}`,
+                              whiteSpace: "pre-wrap",
+                            }}
+                          >
+                            {cell}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          }
+
+          if (block.type === "checklist") {
+            return (
+              <ul
+                key={block.id}
+                style={{
+                  display: "grid",
+                  gap: 8,
+                  margin: 0,
+                  padding: 0,
+                  color: colors.text,
+                  listStyle: "none",
+                }}
+              >
+                {getChecklistItems(block).map((item) => (
+                  <li
+                    key={item.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: 8,
+                      lineHeight: 1.55,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      role="checkbox"
+                      aria-checked={item.checked}
+                      aria-label={item.checked ? "Completed" : "Not completed"}
+                      disabled={!onChecklistItemToggle || checklistToggleDisabled}
+                      onClick={() =>
+                        onChecklistItemToggle?.(
+                          block.id,
+                          item.id,
+                          !item.checked,
+                        )
+                      }
+                      style={{
+                        display: "inline-grid",
+                        width: 18,
+                        height: 18,
+                        flex: "0 0 18px",
+                        placeItems: "center",
+                        marginTop: 2,
+                        padding: 0,
+                        border: `1px solid ${item.checked ? colors.accent : colors.muted}`,
+                        borderRadius: "50%",
+                        color: colors.panel,
+                        background: item.checked ? colors.accent : "transparent",
+                        cursor:
+                          onChecklistItemToggle && !checklistToggleDisabled
+                            ? "pointer"
+                            : "default",
+                      }}
+                    >
+                      {item.checked && <Check size={12} aria-hidden="true" />}
+                    </button>
+                    <span
+                      style={{
+                        textDecoration: item.checked ? "line-through" : "none",
+                        opacity: item.checked ? 0.65 : 1,
+                        whiteSpace: "pre-wrap",
+                      }}
+                    >
+                      {item.text}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             );
           }
 
@@ -3366,6 +3836,7 @@ export default function Sidebar({
   persistedAnalysis,
   transcriptStatus,
 }: SidebarProps) {
+  const [accountLabel, setAccountLabel] = useState("");
   const [activeWorkspace, setActiveWorkspace] =
     useState<PrimaryWorkspace>("NOTES");
   const [viewMode, setViewMode] = useState<ViewMode>("LIST");
@@ -3423,6 +3894,10 @@ export default function Sidebar({
   );
 
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [checklistSaveError, setChecklistSaveError] = useState<string | null>(
+    null,
+  );
+  const [isSavingChecklist, setIsSavingChecklist] = useState(false);
 
   const [minimized, setMinimized] = useState(false);
 
@@ -3450,6 +3925,23 @@ export default function Sidebar({
   const previousContextAbortController = useRef<AbortController | null>(null);
   const currentVideoIdRef = useRef(videoId);
   currentVideoIdRef.current = videoId;
+
+  useEffect(() => {
+    let active = true;
+    void getDashboardProfile()
+      .then((profile) => {
+        if (active) {
+          setAccountLabel(profile.username.trim() || profile.email);
+        }
+      })
+      .catch(() => {
+        if (active) setAccountLabel("Account unavailable");
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const loadPreviousContext = useCallback(async () => {
     previousContextAbortController.current?.abort();
@@ -3761,6 +4253,58 @@ export default function Sidebar({
     setSelectedNote(savedNote);
     setEditingNote(null);
     setViewMode("READER");
+  }
+
+  async function handleChecklistItemToggle(
+    blockId: string,
+    itemId: string,
+    checked: boolean,
+  ) {
+    if (!selectedNote || isSavingChecklist) return;
+    const originalNote = selectedNote;
+    const currentDocument = normalizeDocument(selectedNote);
+    const updatedDocument: NoteDocument = {
+      ...currentDocument,
+      blocks: currentDocument.blocks.map((block) =>
+        block.id === blockId && block.type === "checklist"
+          ? {
+              ...block,
+              metadata: {
+                ...block.metadata,
+                checklist_items: getChecklistItems(block).map((item) =>
+                  item.id === itemId ? { ...item, checked } : item,
+                ),
+              },
+            }
+          : block,
+      ),
+    };
+    const optimisticNote = {
+      ...selectedNote,
+      document: updatedDocument,
+      content: documentToPlainText(updatedDocument),
+    };
+    setSelectedNote(optimisticNote);
+    setChecklistSaveError(null);
+    setIsSavingChecklist(true);
+    try {
+      const savedNote = await sendUpdateNote(selectedNote.id, {
+        title: selectedNote.title,
+        content: optimisticNote.content,
+        document: updatedDocument,
+      });
+      setCurrentNotes((current) =>
+        current.map((note) => (note.id === savedNote.id ? savedNote : note)),
+      );
+      setSelectedNote(savedNote);
+    } catch (error) {
+      setSelectedNote(originalNote);
+      setChecklistSaveError(
+        error instanceof Error ? error.message : "Could not save checklist state.",
+      );
+    } finally {
+      setIsSavingChecklist(false);
+    }
   }
 
   async function handleAnalyzeVideo() {
@@ -5550,23 +6094,6 @@ export default function Sidebar({
                             {note.title || "Untitled note"}
                           </div>
 
-                          <div
-                            style={{
-                              fontSize: 12,
-                              lineHeight: 1.55,
-                              color: colors.muted,
-                              display: "-webkit-box",
-                              WebkitLineClamp: 3,
-                              WebkitBoxOrient: "vertical",
-                              overflow: "hidden",
-                              whiteSpace: "pre-wrap",
-                            }}
-                          >
-                            {note.content ||
-                              documentToPlainText(normalizeDocument(note)) ||
-                              "Empty note"}
-                          </div>
-
                           <FolderPathMetadata
                             note={note}
                             colors={colors}
@@ -5585,29 +6112,6 @@ export default function Sidebar({
                             </div>
                           )}
                         </div>
-
-                        {note.timestamp_seconds !== null &&
-                          note.timestamp_seconds !== undefined && (
-                            <span
-                              onClick={(event) => {
-                                event.stopPropagation();
-
-                                jumpToTimestamp(note.timestamp_seconds!);
-                              }}
-                              style={{
-                                flexShrink: 0,
-                                padding: "4px 7px",
-                                borderRadius: 6,
-                                background: colors.accentSoft,
-                                color: colors.accent,
-                                fontSize: 10,
-                                fontWeight: 800,
-                                cursor: "pointer",
-                              }}
-                            >
-                              {formatTimestamp(note.timestamp_seconds)}
-                            </span>
-                          )}
                       </div>
                     </button>
 
@@ -5668,11 +6172,25 @@ export default function Sidebar({
         {activeWorkspace === "NOTES" &&
           viewMode === "READER" &&
           selectedNote && (
+          <>
+          {checklistSaveError && (
+            <div role="alert" style={{ color: colors.danger, fontSize: 11 }}>
+              {checklistSaveError}
+            </div>
+          )}
+          {isSavingChecklist && (
+            <div role="status" style={{ color: colors.muted, fontSize: 10 }}>
+              Saving checklist…
+            </div>
+          )}
           <NoteReader
             note={selectedNote}
             colors={colors}
             showFolderPath
+            onChecklistItemToggle={handleChecklistItemToggle}
+            checklistToggleDisabled={isSavingChecklist}
           />
+          </>
         )}
 
         {/* WRITER */}
@@ -5707,6 +6225,7 @@ export default function Sidebar({
             flexShrink: 0,
             display: "flex",
             alignItems: "center",
+            justifyContent: "space-between",
             gap: 7,
             padding: "8px 15px",
             borderTop: `1px solid ${colors.border}`,
@@ -5716,15 +6235,29 @@ export default function Sidebar({
             fontWeight: 650,
           }}
         >
-          <Check
-            size={13}
-            aria-hidden="true"
-            style={{
-              color: "#4ade80",
-              filter: "drop-shadow(0 0 5px rgba(74, 222, 128, 0.9))",
-            }}
-          />
-          Transcript Ready
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+            <Check
+              size={13}
+              aria-hidden="true"
+              style={{
+                color: "#4ade80",
+                filter: "drop-shadow(0 0 5px rgba(74, 222, 128, 0.9))",
+              }}
+            />
+            Transcript Ready
+          </span>
+          <span
+          title={accountLabel || "Loading account"}
+          style={{
+            maxWidth: "55%",
+            overflow: "hidden",
+            marginLeft: "auto",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+          >
+          {accountLabel || "Loading account"}
+          </span>
         </div>
       )}
     </aside>

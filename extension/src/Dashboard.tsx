@@ -41,9 +41,13 @@ import {
 import {
   createEmptyDocument,
   documentToPlainText,
+  getChecklistItems,
   getListItems,
+  getTableRows,
+  hasMeaningfulBlockContent,
   normalizeDocument,
   type NoteBlock,
+  type NoteDocument,
   type VideoNote,
 } from "./noteDocument";
 import {
@@ -286,6 +290,21 @@ function Dashboard({
 }) {
   const [location, setLocation] = useState<DashboardLocation>(locationFromHash);
   const route = location.route;
+  const [hasVisitedFolders, setHasVisitedFolders] = useState(
+    route === "folders" && location.folderId === null,
+  );
+  const [visitedFolderIds, setVisitedFolderIds] = useState<Set<number>>(
+    () => new Set(location.folderId === null ? [] : [location.folderId]),
+  );
+  const [hasVisitedVideoLibrary, setHasVisitedVideoLibrary] = useState(
+    route === "videos" && location.videoId === null,
+  );
+  const [visitedVideoIds, setVisitedVideoIds] = useState<Set<string>>(
+    () => new Set(location.videoId === null ? [] : [location.videoId]),
+  );
+  const [hasVisitedKnowledge, setHasVisitedKnowledge] = useState(
+    route === "knowledge",
+  );
   const [dashboardUsername, setDashboardUsername] = useState("");
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
@@ -345,6 +364,33 @@ function Dashboard({
 
       const nextLocation = locationFromHash(nextHash);
       const previousLocation = locationFromHash(previousHashRef.current);
+      if (nextLocation.route === "folders") {
+        if (nextLocation.folderId === null) {
+          setHasVisitedFolders(true);
+        } else {
+          const folderId = nextLocation.folderId;
+          setVisitedFolderIds((current) => {
+            const next = new Set(current);
+            next.add(folderId);
+            return next;
+          });
+        }
+      }
+      if (nextLocation.route === "videos") {
+        if (nextLocation.videoId === null) {
+          setHasVisitedVideoLibrary(true);
+        } else {
+          const youtubeId = nextLocation.videoId;
+          setVisitedVideoIds((current) => {
+            const next = new Set(current);
+            next.add(youtubeId);
+            return next;
+          });
+        }
+      }
+      if (nextLocation.route === "knowledge") {
+        setHasVisitedKnowledge(true);
+      }
       if (
         nextLocation.noteWorkspace &&
         !previousLocation.noteWorkspace &&
@@ -648,7 +694,64 @@ function Dashboard({
               }}
             />
           </div>
-          {route === "dashboard" ? null : route === "notes" ? (
+          {hasVisitedFolders && (
+            <div hidden={route !== "folders" || location.folderId !== null}>
+              <FoldersPage />
+            </div>
+          )}
+          {[...visitedFolderIds].map((folderId) => (
+            <div
+              key={folderId}
+              hidden={route !== "folders" || location.folderId !== folderId}
+            >
+              <FolderDetailPage
+                folderId={folderId}
+                onOpenNote={(noteId) => {
+                  window.location.hash = `#/notes/${noteId}`;
+                }}
+              />
+            </div>
+          ))}
+          {hasVisitedVideoLibrary && (
+            <div hidden={route !== "videos" || location.videoId !== null}>
+              <VideosLibraryPage
+                onOpenVideo={(youtubeId) => {
+                  window.location.hash = `#/videos/${encodeURIComponent(youtubeId)}`;
+                }}
+              />
+            </div>
+          )}
+          {[...visitedVideoIds].map((youtubeId) => (
+            <div
+              key={youtubeId}
+              hidden={route !== "videos" || location.videoId !== youtubeId}
+            >
+              <VideoDetailPage
+                youtubeId={youtubeId}
+                activeTab={
+                  location.videoId === youtubeId ? location.videoTab : "notes"
+                }
+                onBack={() => {
+                  window.location.hash = "#/videos";
+                }}
+                onTabChange={(tab) => {
+                  window.location.hash = `#/videos/${youtubeId}?tab=${tab}`;
+                }}
+                onOpenNote={(noteId) => {
+                  window.location.hash = `#/notes/${noteId}`;
+                }}
+                onCreateNote={(videoId) => {
+                  window.location.hash = `#/notes/new?videoId=${encodeURIComponent(videoId)}`;
+                }}
+              />
+            </div>
+          ))}
+          {hasVisitedKnowledge && (
+            <div hidden={route !== "knowledge"}>
+              <DashboardKnowledgeWorkspace dashboardState={dashboardState} />
+            </div>
+          )}
+          {route === "notes" ? (
             <NotesPage
               dashboardState={dashboardState}
               onRetry={refreshDashboard}
@@ -662,46 +765,6 @@ function Dashboard({
                 window.location.hash = `#/notes/${noteId}`;
               }}
             />
-          ) : route === "folders" ? (
-            location.folderId === null ? (
-              <FoldersPage />
-            ) : (
-              <FolderDetailPage
-                key={location.folderId}
-                folderId={location.folderId}
-                onOpenNote={(noteId) => {
-                  window.location.hash = `#/notes/${noteId}`;
-                }}
-              />
-            )
-          ) : route === "videos" ? (
-            location.videoId ? (
-              <VideoDetailPage
-                key={location.videoId}
-                youtubeId={location.videoId}
-                activeTab={location.videoTab}
-                onBack={() => {
-                  window.location.hash = "#/videos";
-                }}
-                onTabChange={(tab) => {
-                  window.location.hash = `#/videos/${location.videoId}?tab=${tab}`;
-                }}
-                onOpenNote={(noteId) => {
-                  window.location.hash = `#/notes/${noteId}`;
-                }}
-                onCreateNote={(youtubeId) => {
-                  window.location.hash = `#/notes/new?videoId=${encodeURIComponent(youtubeId)}`;
-                }}
-              />
-            ) : (
-              <VideosLibraryPage
-                onOpenVideo={(youtubeId) => {
-                  window.location.hash = `#/videos/${encodeURIComponent(youtubeId)}`;
-                }}
-              />
-            )
-          ) : route === "knowledge" ? (
-            <DashboardKnowledgeWorkspace dashboardState={dashboardState} />
           ) : route === "search" ? (
             <FolderSearchPage
               dashboardState={dashboardState}
@@ -717,7 +780,10 @@ function Dashboard({
               onChangePassword={onChangePassword}
               onSendPasswordRecovery={onSendPasswordRecovery}
             />
-          ) : (
+          ) : route === "dashboard" ||
+            route === "folders" ||
+            route === "videos" ||
+            route === "knowledge" ? null : (
             <WorkspacePlaceholder route={route} />
           )}
         </main>
@@ -871,6 +937,7 @@ function DashboardHome({
   onOpenNote,
 }: DashboardHomeProps) {
   const [recentVideosRefreshKey, setRecentVideosRefreshKey] = useState(0);
+  const [totalVideos, setTotalVideos] = useState<number | null>(null);
   const refreshDashboardAndVideos = () => {
     onRetry();
     setRecentVideosRefreshKey((key) => key + 1);
@@ -880,6 +947,7 @@ function DashboardHome({
     <>
       <DashboardOverview
         dashboardState={dashboardState}
+        totalVideos={totalVideos}
         onRefresh={refreshDashboardAndVideos}
       />
       <div className="dashboard-columns">
@@ -888,7 +956,10 @@ function DashboardHome({
           onRetry={onRetry}
           onOpenNote={onOpenNote}
         />
-        <RecentVideos refreshKey={recentVideosRefreshKey} />
+        <RecentVideos
+          refreshKey={recentVideosRefreshKey}
+          onTotalVideosChange={setTotalVideos}
+        />
       </div>
       <QuickActions onViewNotes={onNavigateToNotes} />
     </>
@@ -897,19 +968,21 @@ function DashboardHome({
 
 function DashboardOverview({
   dashboardState,
+  totalVideos,
   onRefresh,
 }: {
   dashboardState: DashboardState;
+  totalVideos: number | null;
   onRefresh: () => void;
 }) {
   const data =
     dashboardState.status === "ready" ? dashboardState.data : null;
   const metrics = [
     {
-      label: "Total notes",
-      value: data ? String(data.totalNotes) : "—",
-      detail: "All notes in your account",
-      icon: FileText,
+      label: "Total videos",
+      value: totalVideos === null ? "—" : String(totalVideos),
+      detail: "Videos in your library",
+      icon: Clapperboard,
       className: "metric-cyan",
     },
     {
@@ -1119,7 +1192,13 @@ type RecentVideosState =
   | { status: "error"; message: string; requestKey: string }
   | { status: "ready"; videos: LibraryVideo[]; requestKey: string };
 
-function RecentVideos({ refreshKey }: { refreshKey: number }) {
+function RecentVideos({
+  refreshKey,
+  onTotalVideosChange,
+}: {
+  refreshKey: number;
+  onTotalVideosChange: (count: number) => void;
+}) {
   const [state, setState] = useState<RecentVideosState>({
     status: "loading",
   });
@@ -1140,6 +1219,7 @@ function RecentVideos({ refreshKey }: { refreshKey: number }) {
             videos: page.results,
             requestKey,
           });
+          onTotalVideosChange(page.count);
         }
       })
       .catch((error: unknown) => {
@@ -1156,7 +1236,7 @@ function RecentVideos({ refreshKey }: { refreshKey: number }) {
     return () => {
       active = false;
     };
-  }, [requestKey]);
+  }, [onTotalVideosChange, requestKey]);
 
   const currentState =
     state.status !== "loading" && state.requestKey !== requestKey
@@ -1650,6 +1730,8 @@ function supportedDocumentBlocks(note: VideoNote): NoteBlock[] {
         block.type === "command" ||
         block.type === "bullet_list" ||
         block.type === "numbered_list" ||
+        block.type === "table" ||
+        block.type === "checklist" ||
         block.type === "screenshot"),
   );
 }
@@ -1677,6 +1759,18 @@ function structuredDocumentText(note: VideoNote): string {
 
       if (block.type === "bullet_list" || block.type === "numbered_list") {
         return getListItems(block.content).join("\n");
+      }
+
+      if (block.type === "table") {
+        return getTableRows(block)
+          .map((row) => row.join(" | "))
+          .join("\n");
+      }
+
+      if (block.type === "checklist") {
+        return getChecklistItems(block)
+          .map((item) => `${item.checked ? "[x]" : "[ ]"} ${item.text}`)
+          .join("\n");
       }
 
       return block.content;
@@ -1734,13 +1828,9 @@ function noteExportFileName(title: string, extension: "html" | "pdf"): string {
 }
 
 function noteExportBlocks(note: DashboardNote): NoteBlock[] {
-  const blocks = normalizeDocument(note).blocks.filter((block) => {
-    if (block.type === "image" || block.type === "screenshot") return true;
-    if (block.type === "bullet_list" || block.type === "numbered_list") {
-      return getListItems(block.content).length > 0;
-    }
-    return block.content.trim().length > 0;
-  });
+  const blocks = normalizeDocument(note).blocks.filter(
+    hasMeaningfulBlockContent,
+  );
   if (blocks.length > 0) return blocks;
   return note.content.trim()
     ? [{ id: "legacy-content", type: "paragraph", content: note.content }]
@@ -1846,6 +1936,24 @@ function downloadNoteAsHtml(note: DashboardNote): void {
         .join("");
       return `<${tag}>${items}</${tag}>`;
     }
+    if (block.type === "table") {
+      const rows = getTableRows(block)
+        .map(
+          (row) =>
+            `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`,
+        )
+        .join("");
+      return `<div class="note-table-wrap"><table class="note-table"><tbody>${rows}</tbody></table></div>`;
+    }
+    if (block.type === "checklist") {
+      const items = getChecklistItems(block)
+        .map(
+          (item) =>
+            `<li><span class="checklist-box">${item.checked ? "✓" : ""}</span><span${item.checked ? ' class="is-complete"' : ""}>${escapeHtml(item.text)}</span></li>`,
+        )
+        .join("");
+      return `<ul class="note-checklist">${items}</ul>`;
+    }
     if (block.type === "url") {
       const url = noteBlockUrl(block);
       const label =
@@ -1918,6 +2026,13 @@ function downloadNoteAsHtml(note: DashboardNote): void {
     p { margin: 12px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
     ul, ol { padding-left: 26px; }
     li { margin: 5px 0; }
+    .note-table-wrap { overflow-x: auto; margin: 16px 0; }
+    .note-table { width: 100%; border-collapse: collapse; }
+    .note-table td { min-width: 70px; padding: 8px 10px; border: 1px solid #cbd5e1; white-space: pre-wrap; }
+    .note-checklist { padding: 0; list-style: none; }
+    .note-checklist li { display: flex; align-items: flex-start; gap: 8px; }
+    .checklist-box { display: inline-grid; width: 14px; height: 14px; flex: 0 0 auto; place-items: center; margin-top: 4px; border: 1px solid #64748b; border-radius: 3px; font-size: 11px; line-height: 1; }
+    .is-complete { color: #64748b; text-decoration: line-through; }
     a { color: #075985; overflow-wrap: anywhere; }
     img { display: block; max-width: 100%; max-height: 680px; object-fit: contain; border-radius: 6px; }
     figure { margin: 20px 0; }
@@ -2036,6 +2151,94 @@ async function downloadNoteAsPdf(note: DashboardNote): Promise<void> {
     if (linkUrl) addLink(caption || "Open image", linkUrl);
     else addText(caption || "Image unavailable", { size: 10 });
   };
+  const addTable = (sourceRows: string[][]) => {
+    const columnCount = Math.max(0, ...sourceRows.map((row) => row.length));
+    if (columnCount === 0 || sourceRows.length === 0) return;
+
+    const fontSize = columnCount <= 4 ? 9 : columnCount <= 7 ? 8 : 7;
+    const lineHeight = fontSize * 1.45;
+    const cellPaddingX = 5;
+    const cellPaddingY = 5;
+    const columnWidth = maxWidth / columnCount;
+    const textWidth = Math.max(12, columnWidth - cellPaddingX * 2);
+    const rows = sourceRows.map((row) =>
+      Array.from({ length: columnCount }, (_, columnIndex) =>
+        pdf.splitTextToSize(row[columnIndex]?.trim() || " ", textWidth),
+      ),
+    );
+    const rowLineCounts = rows.map((row) =>
+      Math.max(1, ...row.map((cellLines) => cellLines.length)),
+    );
+
+    const drawRow = (
+      rowIndex: number,
+      startLine: number,
+      lineCount: number,
+    ) => {
+      const rowHeight = lineCount * lineHeight + cellPaddingY * 2;
+      const backgroundColor: [number, number, number] =
+        rowIndex % 2 === 0 ? [241, 246, 250] : [255, 255, 255];
+      pdf.setFillColor(...backgroundColor);
+      pdf.setDrawColor(198, 210, 221);
+      pdf.setLineWidth(0.6);
+      pdf.rect(margin, y, maxWidth, rowHeight, "FD");
+
+      for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+        const cellX = margin + columnIndex * columnWidth;
+        if (columnIndex > 0) {
+          pdf.line(cellX, y, cellX, y + rowHeight);
+        }
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(fontSize);
+        pdf.setTextColor(
+          39,
+          54,
+          72,
+        );
+        const lines = rows[rowIndex][columnIndex].slice(
+          startLine,
+          startLine + lineCount,
+        );
+        if (lines.length > 0) {
+          pdf.text(
+            lines,
+            cellX + cellPaddingX,
+            y + cellPaddingY + fontSize,
+            { lineHeightFactor: lineHeight / fontSize },
+          );
+        }
+      }
+      y += rowHeight;
+    };
+
+    y += 4;
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      let startLine = 0;
+      while (startLine < rowLineCounts[rowIndex]) {
+        const availableLines = Math.floor(
+          (pageHeight - bottomMargin - y - cellPaddingY * 2) / lineHeight,
+        );
+        if (availableLines < 1) {
+          pdf.addPage();
+          y = margin;
+          continue;
+        }
+
+        const lineCount = Math.min(
+          rowLineCounts[rowIndex] - startLine,
+          availableLines,
+        );
+        drawRow(rowIndex, startLine, lineCount);
+        startLine += lineCount;
+
+        if (startLine < rowLineCounts[rowIndex]) {
+          pdf.addPage();
+          y = margin;
+        }
+      }
+    }
+    y += 9;
+  };
 
   pdf.setFont("helvetica", "bold");
   pdf.setFontSize(22);
@@ -2057,9 +2260,6 @@ async function downloadNoteAsPdf(note: DashboardNote): Promise<void> {
   const exportBlocks = noteExportBlocks(note);
   if (!exportBlocks.length) addText("This note has no text content.", { color: [92, 106, 122] });
   for (const block of exportBlocks) {
-    if (!block.content.trim() && block.type !== "image" && block.type !== "screenshot") {
-      continue;
-    }
     switch (block.type) {
       case "heading":
         y += 5;
@@ -2120,6 +2320,17 @@ async function downloadNoteAsPdf(note: DashboardNote): Promise<void> {
         });
         break;
       }
+      case "table":
+        addTable(getTableRows(block));
+        break;
+      case "checklist":
+        getChecklistItems(block).forEach((item) => {
+          addText(`${item.checked ? "[x]" : "[ ]"} ${item.text}`, {
+            indent: 6,
+            lineHeight: 16,
+          });
+        });
+        break;
       case "url": {
         const url = noteBlockUrl(block);
         const label =
@@ -2316,6 +2527,7 @@ function NoteWorkspace({
   );
   const [noteDocument, setNoteDocument] = useState(savedDocument);
   const [isSaving, setIsSaving] = useState(false);
+  const [isChecklistSaving, setIsChecklistSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -2686,6 +2898,56 @@ function NoteWorkspace({
       );
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleChecklistItemToggle = async (
+    blockId: string,
+    itemId: string,
+    checked: boolean,
+  ) => {
+    if (!note || isChecklistSaving) return;
+    const previousDocument = savedDocument;
+    const updatedDocument: NoteDocument = {
+      ...savedDocument,
+      blocks: savedDocument.blocks.map((block) =>
+        block.id === blockId && block.type === "checklist"
+          ? {
+              ...block,
+              metadata: {
+                ...block.metadata,
+                checklist_items: getChecklistItems(block).map((item) =>
+                  item.id === itemId ? { ...item, checked } : item,
+                ),
+              },
+            }
+          : block,
+      ),
+    };
+    setSavedDocument(updatedDocument);
+    setNoteDocument(updatedDocument);
+    setSaveError(null);
+    setIsChecklistSaving(true);
+    try {
+      const savedNote = await updateDashboardNote(note.id, {
+        title: note.title,
+        content: documentToPlainText(updatedDocument),
+        document: updatedDocument,
+      });
+      const savedDocument = normalizeDocument(savedNote);
+      setSavedDocument(savedDocument);
+      setNoteDocument(savedDocument);
+      onSaved(savedNote);
+    } catch (error) {
+      setSavedDocument(previousDocument);
+      setNoteDocument(previousDocument);
+      setSaveError(
+        error instanceof Error
+          ? error.message
+          : "Could not save checklist state.",
+      );
+    } finally {
+      setIsChecklistSaving(false);
     }
   };
 
@@ -3082,9 +3344,11 @@ function NoteWorkspace({
           ) : mode === "read" && note ? (
             <div className="note-workspace-content">
               <NoteReader
-                note={note}
+                note={{ ...note, document: savedDocument }}
                 colors={dashboardNoteColors}
                 showTitle={false}
+                onChecklistItemToggle={handleChecklistItemToggle}
+                checklistToggleDisabled={isChecklistSaving}
                 enableTimestampJump={false}
                 onTimestampClick={
                   hasVideo && videoUrl

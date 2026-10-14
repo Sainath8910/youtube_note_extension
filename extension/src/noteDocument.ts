@@ -9,7 +9,15 @@ export type NoteBlockType =
   | "command"
   | "bullet_list"
   | "numbered_list"
+  | "table"
+  | "checklist"
   | "screenshot";
+
+export interface ChecklistItem {
+  id: string;
+  text: string;
+  checked: boolean;
+}
 
 export interface NoteBlock {
   id: string;
@@ -29,6 +37,8 @@ export interface NoteBlock {
     shell?: string;
     timestamp_seconds?: number;
     image?: string;
+    table_rows?: string[][];
+    checklist_items?: ChecklistItem[];
     [key: string]: unknown;
   };
 }
@@ -137,9 +147,50 @@ export function normalizeListContent(content: string): string {
   return getListItems(content).join("\n");
 }
 
+export function getTableRows(block: NoteBlock): string[][] {
+  const rows = block.metadata?.table_rows;
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+
+  return rows.map((row) =>
+    Array.isArray(row)
+      ? row.map((cell) => (typeof cell === "string" ? cell : ""))
+      : [],
+  );
+}
+
+export function getChecklistItems(block: NoteBlock): ChecklistItem[] {
+  const items = block.metadata?.checklist_items;
+  if (!Array.isArray(items)) return [];
+
+  return items.flatMap((item, index) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      return [];
+    }
+    if (
+      typeof item.text !== "string" ||
+      typeof item.checked !== "boolean"
+    ) {
+      return [];
+    }
+    return [{
+      id: typeof item.id === "string" ? item.id : `checklist-item-${index}`,
+      text: item.text,
+      checked: item.checked,
+    }];
+  });
+}
+
 export function hasMeaningfulBlockContent(block: NoteBlock): boolean {
   if (block.type === "image" || block.type === "screenshot") {
     return true;
+  }
+
+  if (block.type === "table") {
+    return getTableRows(block).length > 0;
+  }
+
+  if (block.type === "checklist") {
+    return getChecklistItems(block).length > 0;
   }
 
   if (block.type === "bullet_list" || block.type === "numbered_list") {
@@ -192,6 +243,18 @@ export function documentToPlainText(noteDocument: NoteDocument): string {
       if (block.type === "numbered_list") {
         const items = getListItems(block.content);
         return items.map((item, index) => `${index + 1}. ${item}`).join("\n");
+      }
+
+      if (block.type === "table") {
+        return getTableRows(block)
+          .map((row) => `| ${row.join(" | ")} |`)
+          .join("\n");
+      }
+
+      if (block.type === "checklist") {
+        return getChecklistItems(block)
+          .map((item) => `${item.checked ? "[x]" : "[ ]"} ${item.text}`)
+          .join("\n");
       }
 
       return block.content;

@@ -105,6 +105,8 @@ function isNoteBlock(value: unknown): value is NoteBlock {
       value.type === "command" ||
       value.type === "bullet_list" ||
       value.type === "numbered_list" ||
+      value.type === "table" ||
+      value.type === "checklist" ||
       value.type === "screenshot") &&
     typeof value.content === "string"
   );
