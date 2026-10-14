@@ -1666,7 +1666,7 @@ export function BlockEditor({
               </div>
             ) : block.type === "bullet_list" || block.type === "numbered_list" ? (
               <textarea
-                value={normalizeListContent(block.content)}
+                value={block.content}
                 aria-label={`${block.type === "bullet_list" ? "Bulleted" : "Numbered"} list for block ${index + 1}`}
                 onChange={(event) =>
                   updateBlock(block.id, {

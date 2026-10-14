@@ -369,10 +369,11 @@
   width: fit-content;
   align-items: center;
   gap: 7px;
-  padding: 6px 0;
+  padding: 6px 10px;
   color: #93a5ba;
   background: transparent;
-  border: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
   font: inherit;
   font-size: 10px;
   text-decoration: none;
@@ -381,6 +382,8 @@
 
 .workspace-back-button:hover {
   color: #a5f3fc;
+  background: rgba(148, 163, 184, 0.08);
+  border-color: #2b3c50;
 }
 
 .video-detail-header {

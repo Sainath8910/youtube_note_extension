@@ -18,8 +18,10 @@ export function ProfilePage({
   authenticatedUser,
   onChangePassword,
   onSendPasswordRecovery,
+  onUsernameChange,
 }: {
   authenticatedUser: SafeAuthUser;
+  onUsernameChange: (username: string) => void;
   onChangePassword: (
     currentPassword: string,
     newPassword: string,
@@ -48,6 +50,7 @@ export function ProfilePage({
     void getDashboardProfile()
       .then((profile) => {
         setUsername(profile.username);
+        onUsernameChange(profile.username);
         setLoadState({ status: "ready", profile });
       })
       .catch((error: unknown) => {
@@ -59,7 +62,7 @@ export function ProfilePage({
               : "Could not load your profile.",
         });
       });
-  }, []);
+  }, [onUsernameChange]);
 
   useEffect(() => {
     loadProfile();
@@ -78,6 +81,7 @@ export function ProfilePage({
     void updateDashboardUsername(normalized)
       .then((profile) => {
         setUsername(profile.username);
+        onUsernameChange(profile.username);
         setLoadState({ status: "ready", profile });
         setUsernameFeedback("Your username has been saved.");
         setUsernameFeedbackKind("success");

@@ -2578,7 +2578,7 @@
 .workspace-back-button {
   justify-self: start;
   min-height: 28px;
-  padding: 0 7px;
+  padding: 0 11px;
   font-size: 10px;
 }
 
@@ -3567,6 +3567,14 @@
   padding-top: 2px;
 }
 
+.folder-row-heading {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .folder-row-arrow {
   flex: 0 0 auto;
   margin: 8px 2px 0 8px;
@@ -3580,10 +3588,21 @@
 
 .folder-row-copy h3,
 .folder-empty-state h3 {
+  min-width: 0;
+  overflow: hidden;
   margin: 0;
   color: var(--text-primary);
   font-size: 12px;
   font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-row-date {
+  flex: 0 0 auto;
+  color: #73849a;
+  font-size: 9px;
+  white-space: nowrap;
 }
 
 .folder-row-copy p,
@@ -3864,7 +3883,7 @@
 
   .workspace-back-button {
     gap: 5px;
-    padding: 0 5px;
+    padding: 0 9px;
     font-size: 10px;
   }
 

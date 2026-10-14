@@ -65,6 +65,7 @@ import {
   isDashboardRequestCurrent,
 } from "./dashboardApi";
 import type { SafeAuthUser } from "./backgroundAuth";
+import { getDashboardProfile } from "./profileApi";
 import {
   createDashboardFolder,
   deleteDashboardFolder,
@@ -285,6 +286,7 @@ function Dashboard({
 }) {
   const [location, setLocation] = useState<DashboardLocation>(locationFromHash);
   const route = location.route;
+  const [dashboardUsername, setDashboardUsername] = useState("");
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
@@ -301,6 +303,22 @@ function Dashboard({
     status: "loading",
   });
   const previousRoute = useRef(route);
+
+  useEffect(() => {
+    let active = true;
+    setDashboardUsername("");
+    void getDashboardProfile()
+      .then((profile) => {
+        if (active) setDashboardUsername(profile.username);
+      })
+      .catch(() => {
+        if (active) setDashboardUsername("");
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [authenticatedUser.id]);
 
   useEffect(
     () => () => {
@@ -587,6 +605,7 @@ function Dashboard({
           menuExpanded={mobileNavigationOpen}
           menuButtonRef={menuButtonRef}
           authenticatedUser={authenticatedUser}
+          username={dashboardUsername}
           onSignOut={onSignOut}
           signingOut={signingOut}
           signOutError={signOutError}
@@ -694,6 +713,7 @@ function Dashboard({
           ) : route === "profile" ? (
             <ProfilePage
               authenticatedUser={authenticatedUser}
+              onUsernameChange={setDashboardUsername}
               onChangePassword={onChangePassword}
               onSendPasswordRecovery={onSendPasswordRecovery}
             />
@@ -776,6 +796,7 @@ interface DashboardHeaderProps {
   menuExpanded: boolean;
   menuButtonRef: Ref<HTMLButtonElement>;
   authenticatedUser: SafeAuthUser;
+  username: string;
   onSignOut: () => void;
   signingOut: boolean;
   signOutError?: string;
@@ -787,6 +808,7 @@ function DashboardHeader({
   menuExpanded,
   menuButtonRef,
   authenticatedUser,
+  username,
   onSignOut,
   signingOut,
   signOutError,
@@ -812,7 +834,9 @@ function DashboardHeader({
       <div className="dashboard-account">
         <div className="dashboard-account-copy">
           <span className="connection-dot" aria-hidden="true" />
-          <span>{authenticatedUser.email ?? "Signed in"}</span>
+          <span>
+            {username.trim() || authenticatedUser.email || "Signed in"}
+          </span>
         </div>
         <button
           className="dashboard-signout-button"
@@ -862,7 +886,6 @@ function DashboardHome({
         <RecentNotes
           dashboardState={dashboardState}
           onRetry={onRetry}
-          onViewAll={onNavigateToNotes}
           onOpenNote={onOpenNote}
         />
         <RecentVideos refreshKey={recentVideosRefreshKey} />
@@ -1034,14 +1057,12 @@ function DashboardOverview({
 interface RecentNotesProps {
   dashboardState: DashboardState;
   onRetry: () => void;
-  onViewAll: () => void;
   onOpenNote: (noteId: number) => void;
 }
 
 function RecentNotes({
   dashboardState,
   onRetry,
-  onViewAll,
   onOpenNote,
 }: RecentNotesProps) {
   return (
@@ -1086,7 +1107,6 @@ function RecentNotes({
             : []
         }
         onRetry={onRetry}
-        onViewNotes={onViewAll}
         onSelectNote={onOpenNote}
         compact
       />
@@ -1481,7 +1501,6 @@ function NotesPage({
                 dashboardState={dashboardState}
                 notes={pageNotes}
                 onRetry={onRetry}
-                onViewNotes={onRetry}
                 onSelectNote={onOpenNote}
               />
               {totalPages > 1 && (
@@ -1540,7 +1559,6 @@ function NotesPage({
           dashboardState={dashboardState}
           notes={[]}
           onRetry={onRetry}
-          onViewNotes={onRetry}
         />
       )}
     </section>
@@ -3154,14 +3172,12 @@ function NotesListState({
   dashboardState,
   notes,
   onRetry,
-  onViewNotes,
   compact = false,
   onSelectNote,
 }: {
   dashboardState: DashboardState;
   notes: VideoNote[];
   onRetry: () => void;
-  onViewNotes: () => void;
   compact?: boolean;
   onSelectNote?: (noteId: number) => void;
 }) {
@@ -3222,8 +3238,6 @@ function NotesListState({
       notes={notes}
       onSelectNote={onSelectNote}
       compact={compact}
-      totalNotes={dashboardState.data.totalNotes}
-      onViewNotes={onViewNotes}
     />
   );
 }
@@ -3232,14 +3246,10 @@ function NoteRows({
   notes,
   onSelectNote,
   compact = false,
-  totalNotes,
-  onViewNotes,
 }: {
   notes: Array<VideoNote & { folder_path?: DashboardFolderPathItem[] }>;
   onSelectNote?: (noteId: number) => void;
   compact?: boolean;
-  totalNotes?: number;
-  onViewNotes?: () => void;
 }) {
   return (
     <div className={`notes-list${compact ? " is-compact" : ""}`}>
@@ -3303,15 +3313,6 @@ function NoteRows({
           </article>
         );
       })}
-      {compact &&
-        totalNotes !== undefined &&
-        totalNotes > notes.length &&
-        onViewNotes && (
-          <button className="notes-view-more" type="button" onClick={onViewNotes}>
-            View all {totalNotes} notes
-            <ArrowUpRight size={14} aria-hidden="true" />
-          </button>
-        )}
     </div>
   );
 }
@@ -4432,17 +4433,19 @@ function FoldersPage() {
                 <Folder size={18} aria-hidden="true" />
               </span>
               <div className="folder-row-copy">
-                <h3>{folder.name}</h3>
+                <div className="folder-row-heading">
+                  <h3>{folder.name}</h3>
+                  <time className="folder-row-date" dateTime={folder.created_at}>
+                    Created {formatFolderDate(folder.created_at)}
+                  </time>
+                </div>
                 {folder.description.trim() && <p>{folder.description}</p>}
-                      <time className="folder-row-date" dateTime={folder.created_at}>
-                        Created {formatFolderDate(folder.created_at)}
-                      </time>
-                    </div>
-                    <ArrowUpRight
-                      className="folder-row-arrow"
-                      size={16}
-                      aria-hidden="true"
-                    />
+              </div>
+              <ArrowUpRight
+                className="folder-row-arrow"
+                size={16}
+                aria-hidden="true"
+              />
             </a>
           ))}
         </div>
@@ -4907,7 +4910,12 @@ function FolderDetailPage({
                       <Folder size={18} aria-hidden="true" />
                     </span>
                     <div className="folder-row-copy">
-                      <h3>{child.name}</h3>
+                      <div className="folder-row-heading">
+                        <h3>{child.name}</h3>
+                        <time className="folder-row-date" dateTime={child.created_at}>
+                          Created {formatFolderDate(child.created_at)}
+                        </time>
+                      </div>
                       {child.description.trim() && <p>{child.description}</p>}
                     </div>
                     <ArrowUpRight

@@ -6,7 +6,7 @@ import {
   type VideoNote,
 } from "./noteDocument";
 
-const RECENT_NOTES_LIMIT = 4;
+const RECENT_NOTES_LIMIT = 5;
 const RECENT_CREATION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface DashboardVideoMetadata {
