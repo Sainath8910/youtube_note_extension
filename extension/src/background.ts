@@ -3,6 +3,7 @@ import {
   getBackgroundAuth,
 } from "./backgroundAuth";
 import { fetchDjangoApi } from "./djangoApiRequest";
+import { isTrustedProfileRequestSender } from "./profileApi";
 
 const backgroundAuth = getBackgroundAuth();
 const fetchDjangoApiWithAuth = fetchDjangoApi(() =>
@@ -474,21 +475,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (isRecord(message) && message.type === "PROFILE_API_REQUEST") {
-    const trustedSender = (() => {
-      try {
-        const senderUrl = new URL(sender.url ?? "");
-        const dashboardUrl = new URL(chrome.runtime.getURL("index.html"));
-        return (
-          sender.id === chrome.runtime.id &&
-          senderUrl.origin === dashboardUrl.origin &&
-          senderUrl.pathname === dashboardUrl.pathname &&
-          senderUrl.search === ""
-        );
-      } catch {
-        return false;
-      }
-    })();
-    if (!trustedSender) {
+    if (
+      !isTrustedProfileRequestSender(
+        sender,
+        chrome.runtime.id,
+        chrome.runtime.getURL("index.html"),
+        message.method,
+      )
+    ) {
       sendResponse({
         success: false,
         status: 403,
