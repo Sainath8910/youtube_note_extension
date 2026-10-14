@@ -48,6 +48,7 @@ import {
   createEmptyDocument,
   documentToPlainText,
   getListItems,
+  hasMeaningfulBlockContent,
   normalizeListContent,
   normalizeDocument,
   normalizeFolderPath,
@@ -1970,7 +1971,7 @@ export function NoteReader({
           gap: 16,
         }}
       >
-        {noteDocument.blocks.map((block) => {
+        {noteDocument.blocks.filter(hasMeaningfulBlockContent).map((block) => {
           if (block.type === "heading") {
             return (
               <h2
@@ -1985,6 +1986,10 @@ export function NoteReader({
                 {block.content || "Untitled heading"}
               </h2>
             );
+          }
+
+          if (block.type === "paragraph" && !block.content.trim()) {
+            return null;
           }
 
           if (block.type === "equation") {

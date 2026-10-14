@@ -124,7 +124,7 @@ export function VideosLibraryPage({
     useState<VideoStatusFilter>("all");
   const [sort, setSort] = useState<VideoSortOrder>("updated");
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(12);
+  const [pageSize] = useState(10);
   const requestKey = JSON.stringify([
     page,
     pageSize,
@@ -227,23 +227,6 @@ export function VideosLibraryPage({
           </span>
         </div>
         <div className="video-library-actions">
-          <label className="video-page-size">
-            <span>Per page</span>
-            <select
-              value={pageSize}
-              onChange={(event) => {
-                const nextPageSize = Number(event.target.value);
-                if ([12, 24, 50].includes(nextPageSize)) {
-                  setPage(1);
-                  setPageSize(nextPageSize);
-                }
-              }}
-            >
-              <option value={12}>12</option>
-              <option value={24}>24</option>
-              <option value={50}>50</option>
-            </select>
-          </label>
           <button
             className="icon-button"
             type="button"

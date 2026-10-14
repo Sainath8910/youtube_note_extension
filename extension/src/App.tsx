@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -9,51 +10,20 @@ import {
 import { AlertCircle, BookOpen, Eye, EyeOff, LoaderCircle, ShieldCheck } from "lucide-react";
 import Dashboard from "./Dashboard";
 import type { RecoveryCredentials } from "./backgroundAuth";
+import { readPasswordRecoveryRedirect } from "./authRecovery";
 import { createAuthFlow, isDashboardAccessible } from "./authFlow";
 import "./auth.css";
 
 type AuthFormMode = "sign_in" | "sign_up" | "forgot_password";
 
-interface RecoveryRedirect {
-  active: boolean;
-  credentials: RecoveryCredentials | null;
-  invalid: boolean;
-}
-
-function readRecoveryRedirect(): RecoveryRedirect {
-  const url = new URL(window.location.href);
-  if (url.searchParams.get("flow") !== "recovery") {
-    return { active: false, credentials: null, invalid: false };
-  }
-
-  const query = url.searchParams;
-  const fragment = new URLSearchParams(url.hash.replace(/^#/, ""));
-  const code = query.get("code");
-  const tokenHash = query.get("token_hash");
-  const accessToken = fragment.get("access_token");
-  const refreshToken = fragment.get("refresh_token");
-  const credentials: RecoveryCredentials | null = code
-    ? { code }
-    : tokenHash
-      ? { tokenHash }
-      : accessToken && refreshToken && fragment.get("type") === "recovery"
-        ? { accessToken, refreshToken }
-        : null;
-
-  return {
-    active: true,
-    credentials,
-    invalid:
-      !credentials ||
-      query.has("error") ||
-      fragment.has("error") ||
-      fragment.get("type") !== null && fragment.get("type") !== "recovery",
-  };
-}
-
 function App() {
   const authFlow = useMemo(() => createAuthFlow(), []);
-  const [recovery] = useState(readRecoveryRedirect);
+  const [recovery, setRecovery] = useState(() =>
+    readPasswordRecoveryRedirect(window.location.href),
+  );
+  const consumeRecoveryCredentials = useCallback(() => {
+    setRecovery((current) => ({ ...current, credentials: null }));
+  }, []);
   const authState = useSyncExternalStore(
     authFlow.subscribe,
     authFlow.getSnapshot,
@@ -80,6 +50,7 @@ function App() {
         authFlow={authFlow}
         credentials={recovery.credentials}
         invalidLink={recovery.invalid}
+        onCredentialsConsumed={consumeRecoveryCredentials}
       />
     );
   }
@@ -396,10 +367,12 @@ function PasswordResetForm({
   authFlow,
   credentials,
   invalidLink,
+  onCredentialsConsumed,
 }: {
   authFlow: ReturnType<typeof createAuthFlow>;
   credentials: RecoveryCredentials | null;
   invalidLink: boolean;
+  onCredentialsConsumed: () => void;
 }) {
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -408,12 +381,33 @@ function PasswordResetForm({
       ? "This password reset link is invalid or expired. Request a new link to continue."
       : "",
   );
+  const [verification, setVerification] = useState<
+    "verifying" | "verified" | "failed"
+  >(invalidLink ? "failed" : "verifying");
   const [success, setSuccess] = useState(false);
   const [pending, setPending] = useState(false);
 
+  useEffect(() => {
+    if (invalidLink || !credentials) return;
+    let active = true;
+    void authFlow.verifyPasswordRecovery(credentials).then((result) => {
+      if (!active) return;
+      if (result.success) {
+        setVerification("verified");
+      } else {
+        setVerification("failed");
+        setMessage(result.message);
+      }
+      onCredentialsConsumed();
+    });
+    return () => {
+      active = false;
+    };
+  }, [authFlow, credentials, invalidLink, onCredentialsConsumed]);
+
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!credentials || invalidLink) return;
+    if (verification !== "verified") return;
     if (password.length < 8) {
       setMessage("Use a password with at least 8 characters.");
       return;
@@ -424,7 +418,7 @@ function PasswordResetForm({
     }
     setPending(true);
     setMessage("");
-    void authFlow.resetPassword(credentials, password).then((result) => {
+    void authFlow.resetPassword(password).then((result) => {
       setPending(false);
       if (result.success) {
         setSuccess(true);
@@ -446,8 +440,16 @@ function PasswordResetForm({
         <p className="auth-eyebrow">YOUR LEARNING SPACE</p>
         <h1 id="auth-title">Choose a new password</h1>
         <p className="auth-subtitle">
-          Set a new password for your YouTube Knowledge account.
+          {verification === "verifying"
+            ? "Verifying your secure password reset link…"
+            : "Set a new password for your YouTube Knowledge account."}
         </p>
+        {verification === "verifying" && (
+          <div className="auth-loading" aria-live="polite">
+            <LoaderCircle className="auth-spinner" size={22} aria-hidden="true" />
+            <span>Verifying reset link…</span>
+          </div>
+        )}
         {message && (
           <p
             className={`auth-message is-${success ? "info" : "error"}`}
@@ -456,7 +458,7 @@ function PasswordResetForm({
             {message}
           </p>
         )}
-        {!success && (
+        {!success && verification === "verified" && (
           <form className="auth-form" onSubmit={submit}>
             <label className="auth-field">
               <span>New password</span>
@@ -467,7 +469,7 @@ function PasswordResetForm({
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 required
-                disabled={pending || !credentials || invalidLink}
+                disabled={pending}
               />
             </label>
             <label className="auth-field">
@@ -478,13 +480,13 @@ function PasswordResetForm({
                 value={confirmation}
                 onChange={(event) => setConfirmation(event.target.value)}
                 required
-                disabled={pending || !credentials || invalidLink}
+                disabled={pending}
               />
             </label>
             <button
               className="auth-primary-button"
               type="submit"
-              disabled={pending || !credentials || invalidLink}
+              disabled={pending || verification !== "verified"}
             >
               {pending ? (
                 <>

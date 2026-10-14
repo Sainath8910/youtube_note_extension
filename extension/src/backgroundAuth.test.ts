@@ -15,6 +15,7 @@ import {
   isTrustedDashboardAuthSender,
   sanitizeAuthDiagnostic,
   type BackgroundAuth,
+  type AuthRuntimeResponse,
   type ChromeStorageArea,
 } from "./backgroundAuth";
 
@@ -29,21 +30,29 @@ describe("background password management", () => {
     vi.clearAllMocks();
   });
 
-  it("sends recovery email to the supplied extension recovery route", async () => {
+  it("sends recovery email to the dashboard recovery callback", async () => {
     const authClient = setupClient();
     const { storage } = createStorage();
     const auth = createBackgroundAuth(config, storage);
 
-    const result = await auth.sendPasswordRecovery(
-      "learner@example.com",
-      "chrome-extension://extension-id/index.html?flow=recovery",
+    const dashboardUrl = "chrome-extension://extension-id/index.html";
+    const result = await handleAuthRuntimeMessage(
+      auth,
+      {
+        type: "AUTH_SEND_PASSWORD_RECOVERY",
+        email: "learner@example.com",
+      },
+      dashboardUrl,
     );
 
-    expect(result).toEqual({ success: true, data: null });
+    expect(result).toEqual({
+      type: "AUTH_SEND_PASSWORD_RECOVERY",
+      result: { success: true, data: null },
+    });
     expect(authClient.resetPasswordForEmail).toHaveBeenCalledWith(
       "learner@example.com",
       {
-        redirectTo: "chrome-extension://extension-id/index.html?flow=recovery",
+        redirectTo: `${dashboardUrl}?flow=recovery`,
       },
     );
   });
@@ -90,20 +99,103 @@ describe("background password management", () => {
     expect(authClient.updateUser).not.toHaveBeenCalled();
   });
 
-  it("exchanges and clears a recovery session after resetting the password", async () => {
+  it("verifies a PKCE recovery callback before allowing a password update", async () => {
     const authClient = setupClient();
     const { storage } = createStorage();
     const auth = createBackgroundAuth(config, storage);
+    authClient.exchangeCodeForSession.mockResolvedValueOnce({
+      data: { user, session: session() },
+      error: null,
+    });
 
-    const result = await auth.resetPassword({ code: "recovery-code" }, "new-password");
+    const verified = await auth.verifyPasswordRecovery({
+      code: "recovery-code",
+    });
 
-    expect(result).toEqual({ success: true, data: null });
+    expect(verified).toEqual({ success: true, data: null });
     expect(authClient.exchangeCodeForSession).toHaveBeenCalledWith("recovery-code");
+    expect(authClient.updateUser).not.toHaveBeenCalled();
+    expect(await auth.resetPassword("new-password")).toEqual({
+      success: true,
+      data: null,
+    });
     expect(authClient.updateUser).toHaveBeenCalledWith({
       password: "new-password",
     });
     expect(authClient.signOut).toHaveBeenCalledWith({ scope: "local" });
-    expect(JSON.stringify(result)).not.toContain("recovery-code");
+    expect(JSON.stringify(verified)).not.toContain("recovery-code");
+  });
+
+  it("supports a recovery token hash and rejects expired recovery credentials", async () => {
+    const authClient = setupClient();
+    const { storage, values } = createStorage();
+    const auth = createBackgroundAuth(config, storage);
+    authClient.verifyOtp.mockResolvedValueOnce({
+      data: { user, session: session() },
+      error: null,
+    });
+
+    expect(
+      await auth.verifyPasswordRecovery({ tokenHash: "recovery-token-hash" }),
+    ).toEqual({ success: true, data: null });
+    expect(authClient.verifyOtp).toHaveBeenCalledWith({
+      token_hash: "recovery-token-hash",
+      type: "recovery",
+    });
+
+    await auth.resetPassword("new-password");
+    expect(values.has("youtubeKnowledgePasswordRecoveryVerified")).toBe(false);
+
+    authClient.exchangeCodeForSession.mockResolvedValueOnce({
+      data: { user: null, session: null },
+      error: new Error("expired recovery credential"),
+    });
+    const expired = await auth.verifyPasswordRecovery({ code: "expired-code" });
+    expect(expired).toMatchObject({
+      success: false,
+      error: {
+        message:
+          "This password reset link is invalid or has expired. Request a new one.",
+      },
+    });
+    expect(JSON.stringify(expired)).not.toContain("expired recovery credential");
+    expect(values.has("youtubeKnowledgePasswordRecoveryVerified")).toBe(false);
+  });
+
+  it("does not update a password without a verified recovery session", async () => {
+    const authClient = setupClient();
+    const { storage } = createStorage();
+    const auth = createBackgroundAuth(config, storage);
+
+    const result = await auth.resetPassword("new-password");
+
+    expect(result).toMatchObject({
+      success: false,
+      error: {
+        message:
+          "This password reset link is invalid or has expired. Request a new one.",
+      },
+    });
+    expect(authClient.updateUser).not.toHaveBeenCalled();
+  });
+
+  it("does not persist a recovery marker when the callback has no session", async () => {
+    const authClient = setupClient();
+    const { storage, values } = createStorage();
+    const auth = createBackgroundAuth(config, storage);
+    authClient.exchangeCodeForSession.mockResolvedValueOnce({
+      data: { user, session: null },
+      error: null,
+    });
+
+    const result = await auth.verifyPasswordRecovery({ code: "code-without-session" });
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { message: "This password reset link is invalid or has expired. Request a new one." },
+    });
+    expect(authClient.updateUser).not.toHaveBeenCalled();
+    expect(values.has("youtubeKnowledgePasswordRecoveryVerified")).toBe(false);
   });
 
   it("requires reset-password requests to originate from the recovery route", () => {
@@ -216,8 +308,18 @@ function setupClient(
     })),
     getUser: vi.fn(async () => ({ data: { user }, error: null })),
     resetPasswordForEmail: vi.fn(async () => ({ error: null })),
-    setSession: vi.fn(async () => ({ data: { session: null, user }, error: null })),
-    verifyOtp: vi.fn(async () => ({ data: { session: null, user }, error: null })),
+    setSession: vi.fn(
+      async (): Promise<{
+        data: { session: Session | null; user: User | null };
+        error: Error | null;
+      }> => ({ data: { session: null, user }, error: null }),
+    ),
+    verifyOtp: vi.fn(
+      async (): Promise<{
+        data: { session: Session | null; user: User | null };
+        error: Error | null;
+      }> => ({ data: { session: null, user }, error: null }),
+    ),
     updateUser: vi.fn(async () => ({ data: { user }, error: null })),
     signInWithOAuth: vi.fn(async () => ({
       data: { provider: "google", url: oauthUrl.href, flowId: null },
@@ -264,6 +366,10 @@ function createAuthSpies() {
       data: { user: null, requiresEmailConfirmation: false },
     })),
     sendPasswordRecovery: vi.fn(async () => ({
+      success: true as const,
+      data: null,
+    })),
+    verifyPasswordRecovery: vi.fn(async () => ({
       success: true as const,
       data: null,
     })),
@@ -1054,6 +1160,34 @@ describe("background Supabase authentication", () => {
     expect(
       isAuthRuntimeRequest({ type: "AUTH_GET_ACCESS_TOKEN" }),
     ).toBe(false);
+  });
+
+  it("only accepts recovery verification from the dashboard recovery route", async () => {
+    const { auth, methods } = createAuthSpies();
+    let rejected: AuthRuntimeResponse | undefined;
+    const handled = dispatchAuthRuntimeMessage(
+      auth,
+      {
+        type: "AUTH_VERIFY_PASSWORD_RECOVERY",
+        credentials: { code: "recovery-code" },
+      },
+      {
+        id: "extension-id",
+        url: "chrome-extension://extension-id/index.html",
+      },
+      "extension-id",
+      "chrome-extension://extension-id/index.html",
+      (response) => {
+        rejected = response;
+      },
+    );
+
+    expect(handled).toBe(true);
+    expect(rejected).toMatchObject({
+      type: "AUTH_ERROR",
+      result: { success: false },
+    });
+    expect(methods.verifyPasswordRecovery).not.toHaveBeenCalled();
   });
 
   it("dispatches an auth message from the matching dashboard document", async () => {

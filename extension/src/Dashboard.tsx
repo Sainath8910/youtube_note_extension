@@ -1716,10 +1716,13 @@ function noteExportFileName(title: string, extension: "html" | "pdf"): string {
 }
 
 function noteExportBlocks(note: DashboardNote): NoteBlock[] {
-  const blocks = normalizeDocument(note).blocks.filter(
-    (block) =>
-      block.content.trim() || block.type === "image" || block.type === "screenshot",
-  );
+  const blocks = normalizeDocument(note).blocks.filter((block) => {
+    if (block.type === "image" || block.type === "screenshot") return true;
+    if (block.type === "bullet_list" || block.type === "numbered_list") {
+      return getListItems(block.content).length > 0;
+    }
+    return block.content.trim().length > 0;
+  });
   if (blocks.length > 0) return blocks;
   return note.content.trim()
     ? [{ id: "legacy-content", type: "paragraph", content: note.content }]
@@ -3257,7 +3260,6 @@ function NoteRows({
               <span className="note-row-title">
                 {note.title || "Untitled note"}
               </span>
-              <span className="note-row-preview">{notePreview(note)}</span>
               <span className="note-metadata">
                 {typeof note.video === "number" && (
                   <span className="note-video-label">Video note</span>
@@ -3339,26 +3341,25 @@ function FolderPath({
   );
 }
 
-function notePreview(note: VideoNote): string {
-  const documentText = structuredDocumentText(note);
-  const text =
-    documentText.trim() ||
-    (typeof note.content === "string" ? note.content : "").trim();
-  if (!text) return "No text preview available.";
-  const preview = text.replace(/\s+/g, " ").trim();
-  return preview.length > 220 ? `${preview.slice(0, 217)}...` : preview;
+function formatFolderDate(value: string): string {
+  const timestamp = safeDateValue(value);
+  if (timestamp === null) return "date unavailable";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(timestamp));
 }
 
 function noteDate(note: VideoNote): string {
-  const value = note.updated_at ?? note.created_at;
+  const value = note.created_at ?? note.updated_at;
   const timestamp = safeDateValue(value);
   if (timestamp === null) return "Saved note";
   const date = new Date(timestamp);
-  const label = note.updated_at ? "Updated" : "Created";
-  return `${label} ${new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(undefined, {
     month: "short",
     day: "numeric",
-  }).format(date)}`;
+  }).format(date);
 }
 
 function formatTimestamp(seconds: number): string {
@@ -4433,12 +4434,15 @@ function FoldersPage() {
               <div className="folder-row-copy">
                 <h3>{folder.name}</h3>
                 {folder.description.trim() && <p>{folder.description}</p>}
-              </div>
-              <ArrowUpRight
-                className="folder-row-arrow"
-                size={16}
-                aria-hidden="true"
-              />
+                      <time className="folder-row-date" dateTime={folder.created_at}>
+                        Created {formatFolderDate(folder.created_at)}
+                      </time>
+                    </div>
+                    <ArrowUpRight
+                      className="folder-row-arrow"
+                      size={16}
+                      aria-hidden="true"
+                    />
             </a>
           ))}
         </div>

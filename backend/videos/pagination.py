@@ -5,7 +5,7 @@ from rest_framework.pagination import PageNumberPagination
 class VideoLibraryPagination(PageNumberPagination):
     """Return the standard count/next/previous/results page response."""
 
-    page_size = 12
+    page_size = 10
     page_size_query_param = "page_size"
     max_page_size = 50
 

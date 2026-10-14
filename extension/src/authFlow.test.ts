@@ -463,28 +463,66 @@ describe("dashboard authentication flow", () => {
     ]);
   });
 
-  it("sends only the supplied recovery credential and new password to the background", async () => {
+  it("verifies recovery credentials in the background before password update", async () => {
     const requests: AuthRuntimeRequest[] = [];
     const flow = createAuthFlow(async (request) => {
       requests.push(request);
       return {
-        type: "AUTH_RESET_PASSWORD",
+        type:
+          request.type === "AUTH_VERIFY_PASSWORD_RECOVERY"
+            ? "AUTH_VERIFY_PASSWORD_RECOVERY"
+            : "AUTH_RESET_PASSWORD",
         result: { success: true, data: null },
       };
     });
 
-    const result = await flow.resetPassword(
-      { code: "recovery-code" },
-      "new-password",
-    );
+    const verified = await flow.verifyPasswordRecovery({
+      code: "recovery-code",
+    });
+    const updated = await flow.resetPassword("new-password");
 
-    expect(result).toEqual({ success: true });
+    expect(verified).toEqual({ success: true });
+    expect(updated).toEqual({ success: true });
     expect(requests).toEqual([
       {
-        type: "AUTH_RESET_PASSWORD",
+        type: "AUTH_VERIFY_PASSWORD_RECOVERY",
         credentials: { code: "recovery-code" },
+      },
+      {
+        type: "AUTH_RESET_PASSWORD",
         newPassword: "new-password",
       },
     ]);
+  });
+
+  it("keeps recovery links unverified when the background rejects the credential", async () => {
+    const requests: AuthRuntimeRequest[] = [];
+    const flow = createAuthFlow(async (request) => {
+      requests.push(request);
+      return {
+        type: "AUTH_VERIFY_PASSWORD_RECOVERY",
+        result: {
+          success: false,
+          error: {
+            code: "AUTH_REQUEST_FAILED",
+            message:
+              "This password reset link is invalid or has expired. Request a new one.",
+            diagnosticCode: "AUTH_UNKNOWN",
+          },
+        },
+      };
+    });
+
+    const result = await flow.verifyPasswordRecovery({
+      code: "expired-recovery-code",
+    });
+
+    expect(result).toEqual({
+      success: false,
+      message:
+        "This password reset link is invalid or has expired. Request a new one.",
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.type).toBe("AUTH_VERIFY_PASSWORD_RECOVERY");
   });
 });

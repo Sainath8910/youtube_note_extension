@@ -51,14 +51,14 @@ export interface AuthFlow {
   signInWithGoogle(): Promise<void>;
   signOut(): Promise<void>;
   sendPasswordRecovery(email: string): Promise<AuthActionResult>;
+  verifyPasswordRecovery(
+    credentials: RecoveryCredentials,
+  ): Promise<AuthActionResult>;
   changePassword(
     currentPassword: string,
     newPassword: string,
   ): Promise<AuthActionResult>;
-  resetPassword(
-    credentials: RecoveryCredentials,
-    newPassword: string,
-  ): Promise<AuthActionResult>;
+  resetPassword(newPassword: string): Promise<AuthActionResult>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -605,6 +605,12 @@ export function createAuthFlow(send: AuthMessageSender = sendAuthRuntimeMessage)
         email,
       });
     },
+    verifyPasswordRecovery(credentials) {
+      return runAuthAction(send, {
+        type: "AUTH_VERIFY_PASSWORD_RECOVERY",
+        credentials,
+      });
+    },
     changePassword(currentPassword, newPassword) {
       return runAuthAction(send, {
         type: "AUTH_CHANGE_PASSWORD",
@@ -612,10 +618,9 @@ export function createAuthFlow(send: AuthMessageSender = sendAuthRuntimeMessage)
         newPassword,
       });
     },
-    resetPassword(credentials, newPassword) {
+    resetPassword(newPassword) {
       return runAuthAction(send, {
         type: "AUTH_RESET_PASSWORD",
-        credentials,
         newPassword,
       });
     },

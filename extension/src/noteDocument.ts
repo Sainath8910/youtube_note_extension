@@ -137,8 +137,32 @@ export function normalizeListContent(content: string): string {
   return getListItems(content).join("\n");
 }
 
+export function hasMeaningfulBlockContent(block: NoteBlock): boolean {
+  if (block.type === "image" || block.type === "screenshot") {
+    return true;
+  }
+
+  if (block.type === "bullet_list" || block.type === "numbered_list") {
+    return getListItems(block.content).length > 0;
+  }
+
+  if (block.type === "url") {
+    const text = block.content.trim();
+    const title = typeof block.metadata?.title === "string"
+      ? block.metadata.title.trim()
+      : "";
+    const description = typeof block.metadata?.description === "string"
+      ? block.metadata.description.trim()
+      : "";
+    return text.length > 0 || title.length > 0 || description.length > 0;
+  }
+
+  return block.content.trim().length > 0;
+}
+
 export function documentToPlainText(noteDocument: NoteDocument): string {
   return noteDocument.blocks
+    .filter(hasMeaningfulBlockContent)
     .map((block) => {
       if (block.type === "timestamp") {
         return `[${block.content}]`;
@@ -162,14 +186,12 @@ export function documentToPlainText(noteDocument: NoteDocument): string {
 
       if (block.type === "bullet_list") {
         const items = getListItems(block.content);
-        return items.length > 0 ? items.map((item) => `• ${item}`).join("\n") : "";
+        return items.map((item) => `• ${item}`).join("\n");
       }
 
       if (block.type === "numbered_list") {
         const items = getListItems(block.content);
-        return items.length > 0
-          ? items.map((item, index) => `${index + 1}. ${item}`).join("\n")
-          : "";
+        return items.map((item, index) => `${index + 1}. ${item}`).join("\n");
       }
 
       return block.content;

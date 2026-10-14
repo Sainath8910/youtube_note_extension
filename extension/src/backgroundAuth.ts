@@ -1,9 +1,13 @@
 import {
   createClient,
+  type Session,
   type User,
 } from "@supabase/supabase-js";
 
 const ACCESS_TOKEN_REFRESH_MARGIN_SECONDS = 60;
+const PASSWORD_RECOVERY_MARKER_KEY =
+  "youtubeKnowledgePasswordRecoveryVerified";
+const PASSWORD_RECOVERY_MARKER_TTL_MS = 15 * 60 * 1000;
 const UNSUPPORTED_STORAGE_API_MESSAGE =
   "This browser does not support the secure extension storage required for Supabase authentication. Update Chrome to version 102 or newer.";
 
@@ -82,15 +86,15 @@ export type AuthRuntimeRequest =
   | { type: "AUTH_SIGN_IN_WITH_GOOGLE" }
   | { type: "AUTH_SEND_PASSWORD_RECOVERY"; email: string }
   | {
+      type: "AUTH_VERIFY_PASSWORD_RECOVERY";
+      credentials: RecoveryCredentials;
+    }
+  | {
       type: "AUTH_CHANGE_PASSWORD";
       currentPassword: string;
       newPassword: string;
     }
-  | {
-      type: "AUTH_RESET_PASSWORD";
-      credentials: RecoveryCredentials;
-      newPassword: string;
-    }
+  | { type: "AUTH_RESET_PASSWORD"; newPassword: string }
   | { type: "AUTH_SIGN_OUT" };
 
 export type RecoveryCredentials =
@@ -105,6 +109,7 @@ export type AuthRuntimeResponse =
   | { type: "AUTH_SIGN_IN"; result: AuthResult<SafeAuthMutation> }
   | { type: "AUTH_SIGN_IN_WITH_GOOGLE"; result: AuthResult<SafeAuthMutation> }
   | { type: "AUTH_SEND_PASSWORD_RECOVERY"; result: AuthResult<null> }
+  | { type: "AUTH_VERIFY_PASSWORD_RECOVERY"; result: AuthResult<null> }
   | { type: "AUTH_CHANGE_PASSWORD"; result: AuthResult<null> }
   | { type: "AUTH_RESET_PASSWORD"; result: AuthResult<null> }
   | { type: "AUTH_SIGN_OUT"; result: AuthResult<null> };
@@ -119,14 +124,14 @@ export interface BackgroundAuth {
     email: string,
     redirectTo: string,
   ): Promise<AuthResult<null>>;
+  verifyPasswordRecovery(
+    credentials: RecoveryCredentials,
+  ): Promise<AuthResult<null>>;
   changePassword(
     currentPassword: string,
     newPassword: string,
   ): Promise<AuthResult<null>>;
-  resetPassword(
-    credentials: RecoveryCredentials,
-    newPassword: string,
-  ): Promise<AuthResult<null>>;
+  resetPassword(newPassword: string): Promise<AuthResult<null>>;
   signOut(): Promise<AuthResult<null>>;
   getAccessToken(): Promise<AuthResult<string | null>>;
 }
@@ -452,6 +457,12 @@ export function createBackgroundAuth(
           "Supabase authentication is not configured.",
         );
       },
+      async verifyPasswordRecovery() {
+        return failure(
+          "AUTH_NOT_CONFIGURED",
+          "Supabase authentication is not configured.",
+        );
+      },
       async changePassword() {
         return failure(
           "AUTH_NOT_CONFIGURED",
@@ -479,9 +490,10 @@ export function createBackgroundAuth(
     };
   }
 
+  const supabaseStorage = createChromeStorageAdapter(storageArea);
   const client = createClient(config.url, config.publishableKey, {
     auth: {
-      storage: createChromeStorageAdapter(storageArea),
+      storage: supabaseStorage,
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: false,
@@ -490,6 +502,40 @@ export function createBackgroundAuth(
   });
   let initialization: Promise<AuthResult<null>> | undefined;
   let googleSignInInProgress = false;
+  let passwordRecoveryVerification:
+    | Promise<AuthResult<null>>
+    | undefined;
+
+  const clearPasswordRecoveryMarker = () =>
+    supabaseStorage.removeItem(PASSWORD_RECOVERY_MARKER_KEY);
+
+  const currentRecoveryUserId = async (): Promise<string | null> => {
+    const marker = await supabaseStorage.getItem(
+      PASSWORD_RECOVERY_MARKER_KEY,
+    );
+    if (!marker) return null;
+    try {
+      const parsed: unknown = JSON.parse(marker);
+      if (
+        !isRecord(parsed) ||
+        typeof parsed.userId !== "string" ||
+        typeof parsed.expiresAt !== "number" ||
+        parsed.expiresAt <= Date.now()
+      ) {
+        await clearPasswordRecoveryMarker();
+        return null;
+      }
+      const { data, error } = await client.auth.getUser();
+      if (error || data.user?.id !== parsed.userId) {
+        await clearPasswordRecoveryMarker();
+        return null;
+      }
+      return parsed.userId;
+    } catch {
+      await clearPasswordRecoveryMarker();
+      return null;
+    }
+  };
 
   const initialize = (): Promise<AuthResult<null>> => {
     if (initialization) return initialization;
@@ -748,6 +794,7 @@ export function createBackgroundAuth(
           "AUTH_OAUTH_FAILED",
         );
       }
+      await clearPasswordRecoveryMarker();
       return {
         success: true,
         data: {
@@ -790,6 +837,7 @@ export function createBackgroundAuth(
     if (!ready.success) return ready;
 
     try {
+      await clearPasswordRecoveryMarker();
       const { data, error } = await operation();
       if (error) {
         const diagnostic = sanitizeAuthDiagnostic(error);
@@ -839,6 +887,7 @@ export function createBackgroundAuth(
       const ready = await initialize();
       if (!ready.success) return ready;
       try {
+        await clearPasswordRecoveryMarker();
         const { error } = await client.auth.resetPasswordForEmail(email, {
           redirectTo,
         });
@@ -861,6 +910,99 @@ export function createBackgroundAuth(
           diagnostic.httpStatus,
         );
       }
+    },
+    verifyPasswordRecovery(credentials) {
+      if (passwordRecoveryVerification) {
+        return passwordRecoveryVerification;
+      }
+      const attempt = (async (): Promise<AuthResult<null>> => {
+        const ready = await initialize();
+        if (!ready.success) return ready;
+        try {
+          if (await currentRecoveryUserId()) {
+            return { success: true, data: null };
+          }
+
+          let recoveredSession: {
+            session: Session | null;
+            user: User | null;
+            error: unknown;
+          };
+          if ("accessToken" in credentials) {
+            const result = await client.auth.setSession({
+              access_token: credentials.accessToken,
+              refresh_token: credentials.refreshToken,
+            });
+            recoveredSession = {
+              session: result.data.session,
+              user: result.data.user,
+              error: result.error,
+            };
+          } else if ("code" in credentials) {
+            const result = await client.auth.exchangeCodeForSession(
+              credentials.code,
+            );
+            recoveredSession = {
+              session: result.data.session,
+              user: result.data.user,
+              error: result.error,
+            };
+          } else {
+            const result = await client.auth.verifyOtp({
+              token_hash: credentials.tokenHash,
+              type: "recovery",
+            });
+            recoveredSession = {
+              session: result.data.session,
+              user: result.data.user,
+              error: result.error,
+            };
+          }
+
+          if (
+            recoveredSession.error ||
+            !recoveredSession.session ||
+            !recoveredSession.user
+          ) {
+            return failure(
+              "AUTH_REQUEST_FAILED",
+              "This password reset link is invalid or has expired. Request a new one.",
+            );
+          }
+
+          const { data, error } = await client.auth.getUser();
+          if (error || data.user?.id !== recoveredSession.user.id) {
+            return failure(
+              "AUTH_REQUEST_FAILED",
+              "This password reset link is invalid or has expired. Request a new one.",
+            );
+          }
+
+          await supabaseStorage.setItem(
+            PASSWORD_RECOVERY_MARKER_KEY,
+            JSON.stringify({
+              userId: data.user.id,
+              expiresAt: Date.now() + PASSWORD_RECOVERY_MARKER_TTL_MS,
+            }),
+          );
+          return { success: true, data: null };
+        } catch (error) {
+          const diagnostic = sanitizeAuthDiagnostic(error);
+          return failure(
+            "AUTH_REQUEST_FAILED",
+            "This password reset link is invalid or has expired. Request a new one.",
+            diagnostic.diagnosticCode,
+            diagnostic.httpStatus,
+          );
+        }
+      })();
+      passwordRecoveryVerification = attempt;
+      void attempt.finally(() => {
+        if (passwordRecoveryVerification === attempt) {
+          passwordRecoveryVerification = undefined;
+        }
+      });
+      return attempt;
     },
     async changePassword(currentPassword, newPassword) {
       const ready = await initialize();
@@ -914,63 +1056,26 @@ export function createBackgroundAuth(
         );
       }
     },
-    async resetPassword(credentials, newPassword) {
+    async resetPassword(newPassword) {
       const ready = await initialize();
       if (!ready.success) return ready;
-      let result: AuthResult<null>;
       try {
-        let authError: unknown = null;
-        if ("accessToken" in credentials) {
-          const result = await client.auth.setSession({
-            access_token: credentials.accessToken,
-            refresh_token: credentials.refreshToken,
-          });
-          authError = result.error;
-        } else if ("code" in credentials) {
-          const result = await client.auth.exchangeCodeForSession(
-            credentials.code,
-          );
-          authError = result.error;
-        } else {
-          const result = await client.auth.verifyOtp({
-            token_hash: credentials.tokenHash,
-            type: "recovery",
-          });
-          authError = result.error;
-        }
-
-        if (authError) {
-          const diagnostic = sanitizeAuthDiagnostic(authError);
-          result = failure(
+        if (!(await currentRecoveryUserId())) {
+          return failure(
             "AUTH_REQUEST_FAILED",
             "This password reset link is invalid or has expired. Request a new one.",
+          );
+        }
+        const update = await client.auth.updateUser({ password: newPassword });
+        if (update.error) {
+          const diagnostic = sanitizeAuthDiagnostic(update.error);
+          return failure(
+            "AUTH_REQUEST_FAILED",
+            "Supabase could not update your password.",
             diagnostic.diagnosticCode,
             diagnostic.httpStatus,
           );
-        } else {
-          const update = await client.auth.updateUser({ password: newPassword });
-          if (update.error) {
-            const diagnostic = sanitizeAuthDiagnostic(update.error);
-            result = failure(
-              "AUTH_REQUEST_FAILED",
-              "Supabase could not update your password.",
-              diagnostic.diagnosticCode,
-              diagnostic.httpStatus,
-            );
-          } else {
-            result = { success: true, data: null };
-          }
         }
-      } catch (error) {
-        const diagnostic = sanitizeAuthDiagnostic(error);
-        result = failure(
-          "AUTH_REQUEST_FAILED",
-          "This password reset link is invalid or has expired. Request a new one.",
-          diagnostic.diagnosticCode,
-          diagnostic.httpStatus,
-        );
-      }
-      try {
         const { error } = await client.auth.signOut({ scope: "local" });
         if (error) {
           return failure(
@@ -978,13 +1083,17 @@ export function createBackgroundAuth(
             "The recovery session could not be cleared. Close this page and sign in again.",
           );
         }
-      } catch {
+        await clearPasswordRecoveryMarker();
+        return { success: true, data: null };
+      } catch (error) {
+        const diagnostic = sanitizeAuthDiagnostic(error);
         return failure(
           "AUTH_REQUEST_FAILED",
-          "The recovery session could not be cleared. Close this page and sign in again.",
+          "Supabase could not update your password.",
+          diagnostic.diagnosticCode,
+          diagnostic.httpStatus,
         );
       }
-      return result;
     },
     async signOut() {
       const ready = await initialize();
@@ -998,6 +1107,7 @@ export function createBackgroundAuth(
             "Supabase could not complete sign out.",
           );
         }
+        await clearPasswordRecoveryMarker();
         return { success: true, data: null };
       } catch {
         return failure(
@@ -1055,6 +1165,11 @@ export async function handleAuthRuntimeMessage(
           `${dashboardUrl}?flow=recovery`,
         ),
       };
+    case "AUTH_VERIFY_PASSWORD_RECOVERY":
+      return {
+        type: request.type,
+        result: await auth.verifyPasswordRecovery(request.credentials),
+      };
     case "AUTH_CHANGE_PASSWORD":
       return {
         type: request.type,
@@ -1066,10 +1181,7 @@ export async function handleAuthRuntimeMessage(
     case "AUTH_RESET_PASSWORD":
       return {
         type: request.type,
-        result: await auth.resetPassword(
-          request.credentials,
-          request.newPassword,
-        ),
+        result: await auth.resetPassword(request.newPassword),
       };
     case "AUTH_SIGN_OUT":
       return { type: request.type, result: await auth.signOut() };
@@ -1099,7 +1211,8 @@ export function dispatchAuthRuntimeMessage(
       sender,
       extensionId,
       dashboardUrl,
-      message.type === "AUTH_RESET_PASSWORD",
+      message.type === "AUTH_VERIFY_PASSWORD_RECOVERY" ||
+        message.type === "AUTH_RESET_PASSWORD",
     )
   ) {
     sendResponse(
@@ -1175,16 +1288,15 @@ export function isAuthRuntimeRequest(
       return true;
     case "AUTH_SEND_PASSWORD_RECOVERY":
       return typeof request.email === "string";
+    case "AUTH_VERIFY_PASSWORD_RECOVERY":
+      return isRecoveryCredentials(request.credentials);
     case "AUTH_CHANGE_PASSWORD":
       return (
         typeof request.currentPassword === "string" &&
         typeof request.newPassword === "string"
       );
     case "AUTH_RESET_PASSWORD":
-      return (
-        typeof request.newPassword === "string" &&
-        isRecoveryCredentials(request.credentials)
-      );
+      return typeof request.newPassword === "string";
     default:
       return false;
   }

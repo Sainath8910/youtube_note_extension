@@ -186,7 +186,7 @@ export function listDashboardVideos(
 ): Promise<VideoLibraryPage> {
   const requestKey = JSON.stringify({
     page: query.page ?? 1,
-    pageSize: query.pageSize ?? 12,
+    pageSize: query.pageSize ?? 10,
     query: query.query ?? "",
     transcriptFilter: query.transcriptFilter ?? "all",
     analysisFilter: query.analysisFilter ?? "all",

@@ -98,11 +98,15 @@ Forgot Password uses Supabase Auth and returns to the dashboard's recovery
 screen. Add the exact URL generated for the installed extension to
 **Supabase Dashboard → Authentication → URL Configuration → Redirect URLs**:
 run `chrome.runtime.getURL("index.html?flow=recovery")` in the extension
-service worker DevTools console and allow that exact result. Do not substitute
-the OAuth `chromiumapp.org` callback: recovery returns to the extension
-dashboard itself. The reset screen consumes the recovery credential in the
-background service worker, removes it from the dashboard address bar, updates
-the password, and clears the temporary recovery session.
+service worker DevTools console and allow that exact result. The recovery
+email request passes that URL as `redirectTo`; it is distinct from the OAuth
+`chromiumapp.org` callback. In the PKCE flow, Supabase verifies the email link
+and redirects to the extension with a short-lived authorization code. The
+background worker exchanges that code using the verifier persisted in trusted
+extension storage before the password form is enabled. Token-hash and legacy
+recovery-token callbacks are also verified by the background worker. The
+dashboard removes callback credentials from its address bar before sending
+them to the worker. Invalid or expired links cannot update a password.
 
 The extension uses the public Supabase URL and publishable key only. Keep the
 Google client secret in Supabase Dashboard; never add it to extension source or
