@@ -1,5 +1,5 @@
 import time
-
+import logging
 from rest_framework import status
 from rest_framework.exceptions import NotFound
 from rest_framework.permissions import IsAuthenticated
@@ -40,6 +40,7 @@ from knowledge.services.retrieval import (
 from knowledge.services.previous_context_jobs import create_previous_context_job
 from videos.models import Video
 
+logger = logging.getLogger(__name__)
 
 class ConversationListCreateView(APIView):
     permission_classes = [IsAuthenticated]
@@ -162,12 +163,26 @@ class ConversationAskView(APIView):
                 {"detail": "The knowledge retrieval request could not be completed."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        except RAGGenerationError:
+        
+        except RAGGenerationError as exc:
+            logger.exception(
+                "AI Knowledge conversation generation failed."
+            )
+            cause = exc.__cause__
+            while cause is not None:
+                logger.error(
+                    "Generation error cause: %s: %s",
+                    type(cause).__name__,
+                    cause,
+                )
+                cause = cause.__cause__
+
             user_message.delete()
             return Response(
                 {"detail": "The AI service could not generate an answer."},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
+
 
         serialized_answer = RAGAnswerSerializer(answer).data
         video_ids = {
