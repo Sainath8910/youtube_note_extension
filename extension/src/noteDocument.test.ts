@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   documentToPlainText,
   getChecklistItems,
+  hasTableHeader,
   getTableRows,
   hasMeaningfulBlockContent,
   type NoteBlock,
@@ -39,6 +40,22 @@ describe("table note blocks", () => {
         metadata: { table_rows: [["", ""]] },
       }),
     ).toBe(true);
+  });
+
+  it("preserves optional table header metadata in plain-text output", () => {
+    const tableWithHeader: NoteBlock = {
+      ...table,
+      metadata: {
+        ...table.metadata,
+        table_has_header: true,
+      },
+    };
+
+    expect(hasTableHeader(tableWithHeader)).toBe(true);
+    expect(
+      documentToPlainText({ version: 1, blocks: [tableWithHeader] }),
+    ).toBe("| Topic | Status |\n| --- | --- |\n| Algebra | Complete |");
+    expect(hasTableHeader(table)).toBe(false);
   });
 });
 

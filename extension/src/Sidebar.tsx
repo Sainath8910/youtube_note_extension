@@ -49,6 +49,7 @@ import {
   documentToPlainText,
   getChecklistItems,
   getListItems,
+  hasTableHeader,
   getTableRows,
   hasMeaningfulBlockContent,
   normalizeListContent,
@@ -1785,14 +1786,22 @@ export function BlockEditor({
                     <tbody>
                       {getTableRows(block).map((row, rowIndex) => (
                         <tr key={`${block.id}-row-${rowIndex}`}>
-                          {row.map((cell, columnIndex) => (
-                            <td
-                              key={`${block.id}-${rowIndex}-${columnIndex}`}
-                              style={{
-                                padding: 3,
-                                border: `1px solid ${colors.border}`,
-                              }}
-                            >
+                          {row.map((cell, columnIndex) => {
+                            const isHeader =
+                              hasTableHeader(block) && rowIndex === 0;
+                            const Cell = isHeader ? "th" : "td";
+                            return (
+                              <Cell
+                                key={`${block.id}-${rowIndex}-${columnIndex}`}
+                                scope={isHeader ? "col" : undefined}
+                                style={{
+                                  padding: 3,
+                                  border: `1px solid ${colors.border}`,
+                                  background: isHeader
+                                    ? colors.input
+                                    : "transparent",
+                                }}
+                              >
                               <input
                                 value={cell}
                                 aria-label={`Table block ${index + 1}, row ${rowIndex + 1}, column ${columnIndex + 1}`}
@@ -1816,16 +1825,39 @@ export function BlockEditor({
                                   color: colors.primaryText,
                                   background: colors.input,
                                   borderColor: colors.border,
+                                  fontWeight: isHeader ? 700 : 400,
                                 }}
                               />
-                            </td>
-                          ))}
+                              </Cell>
+                            );
+                          })}
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    aria-pressed={hasTableHeader(block)}
+                    disabled={getTableRows(block).length === 0}
+                    onClick={() =>
+                      updateBlock(block.id, {
+                        metadata: {
+                          ...block.metadata,
+                          table_has_header: !hasTableHeader(block),
+                        },
+                      })
+                    }
+                    style={{
+                      ...smallToolButton,
+                      color: colors.muted,
+                      borderColor: colors.border,
+                      opacity: getTableRows(block).length === 0 ? 0.5 : 1,
+                    }}
+                  >
+                    {hasTableHeader(block) ? "Remove header" : "+ Add header"}
+                  </button>
                   <button
                     type="button"
                     disabled={getTableRows(block).length >= 20}
@@ -2677,6 +2709,7 @@ export function NoteReader({
 
           if (block.type === "table") {
             const rows = getTableRows(block);
+            const hasHeader = hasTableHeader(block) && rows.length > 0;
             return (
               <div
                 key={block.id}
@@ -2695,12 +2728,36 @@ export function NoteReader({
                     fontSize: 13,
                   }}
                 >
+                  {hasHeader && (
+                    <thead>
+                      <tr key={`${block.id}-header`}>
+                        {rows[0].map((cell, columnIndex) => (
+                          <th
+                            key={`${block.id}-header-${columnIndex}`}
+                            scope="col"
+                            style={{
+                              minWidth: 70,
+                              padding: "8px 10px",
+                              border: `1px solid ${colors.border}`,
+                              background: colors.input,
+                              color: colors.primaryText,
+                              fontWeight: 700,
+                              textAlign: "left",
+                              whiteSpace: "pre-wrap",
+                            }}
+                          >
+                            {cell}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                  )}
                   <tbody>
-                    {rows.map((row, rowIndex) => (
+                    {rows.slice(hasHeader ? 1 : 0).map((row, rowIndex) => (
                       <tr key={`${block.id}-row-${rowIndex}`}>
                         {row.map((cell, columnIndex) => (
                           <td
-                            key={`${block.id}-${rowIndex}-${columnIndex}`}
+                            key={`${block.id}-${rowIndex + (hasHeader ? 1 : 0)}-${columnIndex}`}
                             style={{
                               minWidth: 70,
                               padding: "8px 10px",

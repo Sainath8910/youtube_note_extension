@@ -43,6 +43,7 @@ import {
   documentToPlainText,
   getChecklistItems,
   getListItems,
+  hasTableHeader,
   getTableRows,
   hasMeaningfulBlockContent,
   normalizeDocument,
@@ -1762,9 +1763,12 @@ function structuredDocumentText(note: VideoNote): string {
       }
 
       if (block.type === "table") {
-        return getTableRows(block)
-          .map((row) => row.join(" | "))
-          .join("\n");
+        const rows = getTableRows(block);
+        const lines = rows.map((row) => row.join(" | "));
+        if (hasTableHeader(block) && rows.length > 0) {
+          lines.splice(1, 0, rows[0].map(() => "---").join(" | "));
+        }
+        return lines.join("\n");
       }
 
       if (block.type === "checklist") {
@@ -1937,13 +1941,18 @@ function downloadNoteAsHtml(note: DashboardNote): void {
       return `<${tag}>${items}</${tag}>`;
     }
     if (block.type === "table") {
-      const rows = getTableRows(block)
-        .map(
-          (row) =>
-            `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`,
-        )
+      const tableRows = getTableRows(block);
+      const hasHeader = hasTableHeader(block) && tableRows.length > 0;
+      const renderRow = (row: string[], tag: "td" | "th") =>
+        `<tr>${row.map((cell) => `<${tag}>${escapeHtml(cell)}</${tag}>`).join("")}</tr>`;
+      const header = hasHeader
+        ? `<thead>${renderRow(tableRows[0], "th")}</thead>`
+        : "";
+      const bodyRows = tableRows
+        .slice(hasHeader ? 1 : 0)
+        .map((row) => renderRow(row, "td"))
         .join("");
-      return `<div class="note-table-wrap"><table class="note-table"><tbody>${rows}</tbody></table></div>`;
+      return `<div class="note-table-wrap"><table class="note-table">${header}<tbody>${bodyRows}</tbody></table></div>`;
     }
     if (block.type === "checklist") {
       const items = getChecklistItems(block)
@@ -2028,7 +2037,8 @@ function downloadNoteAsHtml(note: DashboardNote): void {
     li { margin: 5px 0; }
     .note-table-wrap { overflow-x: auto; margin: 16px 0; }
     .note-table { width: 100%; border-collapse: collapse; }
-    .note-table td { min-width: 70px; padding: 8px 10px; border: 1px solid #cbd5e1; white-space: pre-wrap; }
+    .note-table td, .note-table th { min-width: 70px; padding: 8px 10px; border: 1px solid #cbd5e1; white-space: pre-wrap; text-align: left; }
+    .note-table th { background: #eaf0f6; font-weight: 700; }
     .note-checklist { padding: 0; list-style: none; }
     .note-checklist li { display: flex; align-items: flex-start; gap: 8px; }
     .checklist-box { display: inline-grid; width: 14px; height: 14px; flex: 0 0 auto; place-items: center; margin-top: 4px; border: 1px solid #64748b; border-radius: 3px; font-size: 11px; line-height: 1; }
@@ -2151,7 +2161,7 @@ async function downloadNoteAsPdf(note: DashboardNote): Promise<void> {
     if (linkUrl) addLink(caption || "Open image", linkUrl);
     else addText(caption || "Image unavailable", { size: 10 });
   };
-  const addTable = (sourceRows: string[][]) => {
+  const addTable = (sourceRows: string[][], hasHeader: boolean) => {
     const columnCount = Math.max(0, ...sourceRows.map((row) => row.length));
     if (columnCount === 0 || sourceRows.length === 0) return;
 
@@ -2176,8 +2186,12 @@ async function downloadNoteAsPdf(note: DashboardNote): Promise<void> {
       lineCount: number,
     ) => {
       const rowHeight = lineCount * lineHeight + cellPaddingY * 2;
-      const backgroundColor: [number, number, number] =
-        rowIndex % 2 === 0 ? [241, 246, 250] : [255, 255, 255];
+      const isHeader = hasHeader && rowIndex === 0;
+      const backgroundColor: [number, number, number] = isHeader
+        ? [36, 57, 78]
+        : rowIndex % 2 === 0
+          ? [241, 246, 250]
+          : [255, 255, 255];
       pdf.setFillColor(...backgroundColor);
       pdf.setDrawColor(198, 210, 221);
       pdf.setLineWidth(0.6);
@@ -2188,13 +2202,10 @@ async function downloadNoteAsPdf(note: DashboardNote): Promise<void> {
         if (columnIndex > 0) {
           pdf.line(cellX, y, cellX, y + rowHeight);
         }
-        pdf.setFont("helvetica", "normal");
+        pdf.setFont("helvetica", isHeader ? "bold" : "normal");
         pdf.setFontSize(fontSize);
-        pdf.setTextColor(
-          39,
-          54,
-          72,
-        );
+        if (isHeader) pdf.setTextColor(255, 255, 255);
+        else pdf.setTextColor(39, 54, 72);
         const lines = rows[rowIndex][columnIndex].slice(
           startLine,
           startLine + lineCount,
@@ -2212,7 +2223,49 @@ async function downloadNoteAsPdf(note: DashboardNote): Promise<void> {
     };
 
     y += 4;
-    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const maxLinesPerPage = Math.floor(
+      (pageHeight - bottomMargin - margin - cellPaddingY * 2) / lineHeight,
+    );
+    const canRepeatHeader =
+      hasHeader && rowLineCounts[0] < maxLinesPerPage;
+    const repeatHeader = () => {
+      const headerHeight =
+        rowLineCounts[0] * lineHeight + cellPaddingY * 2;
+      if (!canRepeatHeader) return;
+      if (y + headerHeight > pageHeight - bottomMargin) {
+        pdf.addPage();
+        y = margin;
+      }
+      drawRow(0, 0, rowLineCounts[0]);
+    };
+
+    let firstDataRow = 0;
+    if (hasHeader) {
+      let headerStartLine = 0;
+      while (headerStartLine < rowLineCounts[0]) {
+        const availableLines = Math.floor(
+          (pageHeight - bottomMargin - y - cellPaddingY * 2) / lineHeight,
+        );
+        if (availableLines < 1) {
+          pdf.addPage();
+          y = margin;
+          continue;
+        }
+        const lineCount = Math.min(
+          rowLineCounts[0] - headerStartLine,
+          availableLines,
+        );
+        drawRow(0, headerStartLine, lineCount);
+        headerStartLine += lineCount;
+        if (headerStartLine < rowLineCounts[0]) {
+          pdf.addPage();
+          y = margin;
+        }
+      }
+      firstDataRow = 1;
+    }
+
+    for (let rowIndex = firstDataRow; rowIndex < rows.length; rowIndex += 1) {
       let startLine = 0;
       while (startLine < rowLineCounts[rowIndex]) {
         const availableLines = Math.floor(
@@ -2221,6 +2274,7 @@ async function downloadNoteAsPdf(note: DashboardNote): Promise<void> {
         if (availableLines < 1) {
           pdf.addPage();
           y = margin;
+          if (hasHeader) repeatHeader();
           continue;
         }
 
@@ -2234,6 +2288,7 @@ async function downloadNoteAsPdf(note: DashboardNote): Promise<void> {
         if (startLine < rowLineCounts[rowIndex]) {
           pdf.addPage();
           y = margin;
+          if (hasHeader) repeatHeader();
         }
       }
     }
@@ -2321,7 +2376,7 @@ async function downloadNoteAsPdf(note: DashboardNote): Promise<void> {
         break;
       }
       case "table":
-        addTable(getTableRows(block));
+        addTable(getTableRows(block), hasTableHeader(block));
         break;
       case "checklist":
         getChecklistItems(block).forEach((item) => {

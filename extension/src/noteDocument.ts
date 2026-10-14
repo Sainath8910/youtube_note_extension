@@ -38,6 +38,7 @@ export interface NoteBlock {
     timestamp_seconds?: number;
     image?: string;
     table_rows?: string[][];
+    table_has_header?: boolean;
     checklist_items?: ChecklistItem[];
     [key: string]: unknown;
   };
@@ -158,6 +159,10 @@ export function getTableRows(block: NoteBlock): string[][] {
   );
 }
 
+export function hasTableHeader(block: NoteBlock): boolean {
+  return block.metadata?.table_has_header === true;
+}
+
 export function getChecklistItems(block: NoteBlock): ChecklistItem[] {
   const items = block.metadata?.checklist_items;
   if (!Array.isArray(items)) return [];
@@ -246,9 +251,12 @@ export function documentToPlainText(noteDocument: NoteDocument): string {
       }
 
       if (block.type === "table") {
-        return getTableRows(block)
-          .map((row) => `| ${row.join(" | ")} |`)
-          .join("\n");
+        const rows = getTableRows(block);
+        const lines = rows.map((row) => `| ${row.join(" | ")} |`);
+        if (hasTableHeader(block) && rows.length > 0) {
+          lines.splice(1, 0, `| ${rows[0].map(() => "---").join(" | ")} |`);
+        }
+        return lines.join("\n");
       }
 
       if (block.type === "checklist") {
