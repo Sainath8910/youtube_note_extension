@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "YouTube Knowledge Extension",
+  "name": "YouTube Knowledge Extension-AI",
   "version": "0.1.0",
   "description": "A personal knowledge layer for YouTube.",
   "action": {

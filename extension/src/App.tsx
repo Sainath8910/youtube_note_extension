@@ -18,6 +18,9 @@ type AuthFormMode = "sign_in" | "sign_up" | "forgot_password";
 
 function App() {
   const authFlow = useMemo(() => createAuthFlow(), []);
+  const isDevOAuthCallback =
+    window.location.hostname === "localhost" &&
+    new URLSearchParams(window.location.search).has("code");
   const [recovery, setRecovery] = useState(() =>
     readPasswordRecoveryRedirect(window.location.href),
   );
@@ -31,9 +34,9 @@ function App() {
   );
 
   useEffect(() => {
-    if (recovery.active) return;
+    if (recovery.active || isDevOAuthCallback) return;
     void authFlow.refreshStatus();
-  }, [authFlow, recovery.active]);
+  }, [authFlow, isDevOAuthCallback, recovery.active]);
 
   useLayoutEffect(() => {
     if (!recovery.active) return;
@@ -52,6 +55,22 @@ function App() {
         invalidLink={recovery.invalid}
         onCredentialsConsumed={consumeRecoveryCredentials}
       />
+    );
+  }
+
+  if (isDevOAuthCallback) {
+    return (
+      <main className="auth-loading">
+        <section className="auth-status-error" role="alert">
+          <AlertCircle size={22} aria-hidden="true" />
+          <h1>Open the extension dashboard to sign in</h1>
+          <p>
+            This OAuth callback opened the Vite development page. Close this
+            tab and open the dashboard from the YouTube Knowledge extension
+            toolbar icon, then try Google sign-in again.
+          </p>
+        </section>
+      </main>
     );
   }
 

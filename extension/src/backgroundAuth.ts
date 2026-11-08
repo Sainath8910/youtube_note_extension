@@ -229,6 +229,19 @@ function logGoogleOAuthFailure(
     details.status <= 599
       ? details.status
       : undefined;
+  const errorMessage =
+    error instanceof Error ? error.message.toLowerCase() : "";
+  const safeReason =
+    errorMessage.includes("did not approve access") ||
+    errorMessage.includes("user cancelled") ||
+    errorMessage.includes("user canceled")
+      ? "user_cancelled"
+      : errorMessage.includes("redirect") ||
+          errorMessage.includes("callback") ||
+          errorMessage.includes("oauth") ||
+          errorMessage.includes("authorization")
+        ? "oauth_configuration_or_provider_error"
+        : undefined;
 
   console.warn("[YouTube Knowledge] Google OAuth failed.", {
     stage,
@@ -236,6 +249,7 @@ function logGoogleOAuthFailure(
     ...(errorCode ? { errorCode } : {}),
     ...(errorName ? { errorName } : {}),
     ...(httpStatus === undefined ? {} : { httpStatus }),
+    ...(safeReason ? { safeReason } : {}),
   });
 }
 
