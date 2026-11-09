@@ -9,6 +9,7 @@ from notes.serializers import NoteSerializer
 
 from .models import Folder
 from .serializers import FolderDetailSerializer, FolderSerializer
+from notes.trash import trash_folder
 
 
 class FolderListCreateView(generics.ListCreateAPIView):
@@ -16,7 +17,9 @@ class FolderListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        folders = Folder.objects.filter(user=self.request.user)
+        folders = Folder.objects.filter(
+            user=self.request.user, deleted_at__isnull=True
+        )
         if "parent" not in self.request.query_params:
             return folders.order_by("name", "id")
 
@@ -53,11 +56,13 @@ class FolderSearchView(APIView):
         matching_folders = Folder.objects.filter(
             user=request.user,
             name__icontains=query,
+            deleted_at__isnull=True,
         )
         folders = {
             folder["id"]: folder
             for folder in Folder.objects.filter(
                 user=request.user,
+                deleted_at__isnull=True,
             ).values("id", "name", "parent_id")
         }
         path_cache = {}
@@ -113,7 +118,9 @@ class FolderDetailView(generics.RetrieveAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Folder.objects.filter(user=self.request.user)
+        return Folder.objects.filter(
+            user=self.request.user, deleted_at__isnull=True
+        )
 
     def patch(self, request, *args, **kwargs):
         folder = self.get_object()
@@ -128,11 +135,7 @@ class FolderDetailView(generics.RetrieveAPIView):
 
     def delete(self, request, *args, **kwargs):
         folder = self.get_object()
-        if folder.children.exists():
-            raise ValidationError(
-                {"detail": "Cannot delete a folder that contains subfolders."}
-            )
-        folder.delete()
+        trash_folder(folder)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -145,12 +148,14 @@ class FolderNotesListView(generics.ListAPIView):
         if not Folder.objects.filter(
             pk=folder_id,
             user=self.request.user,
+            deleted_at__isnull=True,
         ).exists():
             raise NotFound("Folder not found.")
 
         return Note.objects.filter(
             folder_id=folder_id,
             user=self.request.user,
+            deleted_at__isnull=True,
         ).select_related(
             "video",
             "folder",

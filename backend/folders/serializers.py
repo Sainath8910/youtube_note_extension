@@ -19,13 +19,14 @@ class FolderSerializer(serializers.ModelSerializer):
         model = Folder
         fields = [
             "id",
+            "sync_uuid",
             "name",
             "description",
             "parent",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "sync_uuid", "created_at", "updated_at"]
         validators = []
 
     def get_fields(self):
@@ -34,6 +35,7 @@ class FolderSerializer(serializers.ModelSerializer):
         if request is not None and request.user.is_authenticated:
             fields["parent"].queryset = Folder.objects.filter(
                 user=request.user,
+                deleted_at__isnull=True,
             )
         if self.instance is not None:
             fields["parent"].read_only = True
@@ -57,6 +59,7 @@ class FolderSerializer(serializers.ModelSerializer):
             user=request.user,
             parent_id=parent_id,
             name=name,
+            deleted_at__isnull=True,
         )
         if self.instance is not None:
             folders = folders.exclude(pk=self.instance.pk)

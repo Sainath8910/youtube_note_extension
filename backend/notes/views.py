@@ -25,6 +25,7 @@ from .services.assistance import (
     StaleNoteError,
     create_improvement_proposal,
 )
+from .trash import TrashRestoreConflict, list_trash, restore_trash, trash_note
 
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,8 @@ class NoteListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         return Note.objects.filter(
-            user=self.request.user
+            user=self.request.user,
+            deleted_at__isnull=True,
         ).select_related(
             "video",
             "folder",
@@ -66,7 +68,8 @@ class NoteDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def get_queryset(self):
         return Note.objects.filter(
-            user=self.request.user
+            user=self.request.user,
+            deleted_at__isnull=True,
         ).select_related(
             "video",
             "folder",
@@ -75,13 +78,41 @@ class NoteDetailView(generics.RetrieveUpdateDestroyAPIView):
     def perform_update(self, serializer):
         _save_and_index_note(serializer)
 
+    def perform_destroy(self, instance):
+        trash_note(instance)
+        from knowledge.models import KnowledgeChunk
+
+        KnowledgeChunk.objects.filter(note=instance).delete()
+
+
+class TrashListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response({"items": list_trash(request.user)})
+
+
+class TrashRestoreView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, entity, pk):
+        try:
+            item = restore_trash(request.user, entity, pk)
+        except TrashRestoreConflict as error:
+            return Response({"detail": str(error)}, status=status.HTTP_409_CONFLICT)
+        if item is None:
+            raise NotFound("This trash item is missing or its 30-day recovery period has expired.")
+        return Response({"status": "restored"})
+
 
 class NoteAssistanceView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
         try:
-            note = Note.objects.get(pk=pk, user=request.user)
+            note = Note.objects.get(
+                pk=pk, user=request.user, deleted_at__isnull=True
+            )
         except Note.DoesNotExist:
             raise NotFound("Note not found.") from None
 

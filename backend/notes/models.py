@@ -1,4 +1,7 @@
+import uuid
+
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
 
@@ -12,6 +15,11 @@ class Note(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="notes",
+    )
+    sync_uuid = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        editable=False,
     )
 
     title = models.CharField(
@@ -73,11 +81,33 @@ class Note(models.Model):
         blank=True,
     )
 
+    deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    trash_batch_id = models.UUIDField(null=True, blank=True, db_index=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-updated_at"]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            database = kwargs.get("using") or self._state.db
+            existing_uuid = (
+                type(self)._base_manager.using(database)
+                .filter(pk=self.pk)
+                .values_list("sync_uuid", flat=True)
+                .first()
+            )
+            if (
+                existing_uuid is not None
+                and self._meta.get_field("sync_uuid").to_python(self.sync_uuid)
+                != existing_uuid
+            ):
+                raise ValidationError(
+                    {"sync_uuid": "A note synchronization UUID cannot be changed."}
+                )
+        return super().save(*args, **kwargs)
 
     def __str__(self):
         return self.title

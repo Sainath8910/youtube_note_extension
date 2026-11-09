@@ -21,6 +21,16 @@ export interface DashboardFolderSearchResult {
   path: DashboardFolderBreadcrumb[];
 }
 
+export interface DashboardTrashItem {
+  entity: "note" | "folder";
+  id: number;
+  title: string;
+  note_type?: "VIDEO" | "STANDALONE";
+  video_title?: string;
+  deleted_at: string;
+  expires_at: string;
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -230,5 +240,48 @@ export async function deleteDashboardFolder(folderId: number): Promise<void> {
   });
   if (result !== null) {
     throw new Error("The folders API returned an invalid delete response.");
+  }
+}
+
+function isTrashItem(value: unknown): value is DashboardTrashItem {
+  return (
+    isObject(value) &&
+    (value.entity === "note" || value.entity === "folder") &&
+    typeof value.id === "number" &&
+    Number.isSafeInteger(value.id) &&
+    value.id > 0 &&
+    typeof value.title === "string" &&
+    typeof value.deleted_at === "string" &&
+    Number.isFinite(Date.parse(value.deleted_at)) &&
+    typeof value.expires_at === "string" &&
+    Number.isFinite(Date.parse(value.expires_at)) &&
+    (value.entity === "folder" ||
+      (value.note_type === "VIDEO" || value.note_type === "STANDALONE"))
+  );
+}
+
+export async function listDashboardTrash(): Promise<DashboardTrashItem[]> {
+  const data = await sendFolderCommand({ type: "LIST_TRASH" });
+  if (
+    !isObject(data) ||
+    !Array.isArray(data.items) ||
+    !data.items.every(isTrashItem)
+  ) {
+    throw new Error("The Trash API returned invalid items.");
+  }
+  return data.items;
+}
+
+export async function restoreDashboardTrash(
+  entity: DashboardTrashItem["entity"],
+  itemId: number,
+): Promise<void> {
+  const result = await sendFolderCommand({
+    type: "RESTORE_TRASH",
+    entity,
+    itemId,
+  });
+  if (!isObject(result) || result.status !== "restored") {
+    throw new Error("The Trash API returned an invalid restore response.");
   }
 }

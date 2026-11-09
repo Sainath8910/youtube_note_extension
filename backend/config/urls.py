@@ -26,4 +26,5 @@ urlpatterns = [
     path("api/notes/",include("notes.urls")),
     path("api/videos/",include("videos.urls")),
     path("api/knowledge/", include("knowledge.urls")),
+    path("api/sync/v1/", include("sync_bridge.urls")),
 ]

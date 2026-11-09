@@ -150,7 +150,7 @@ def _retrieve_knowledge(
     chunks = KnowledgeChunk.objects.filter(
         user=user,
         embedding__isnull=False,
-    )
+    ).filter(Q(note__isnull=True) | Q(note__deleted_at__isnull=True))
     if video is not None:
         chunks = chunks.filter(video=video)
     if folder is not None:
@@ -192,6 +192,7 @@ def _video_chunks(*, user: User, video: Video):
         user=user,
         video=video,
         embedding__isnull=False,
+        note__deleted_at__isnull=True,
         source_type__in=(
             KnowledgeChunk.SourceType.NOTE,
             KnowledgeChunk.SourceType.VIDEO_TRANSCRIPT,
@@ -209,7 +210,7 @@ def _combined_candidates(
     candidates = KnowledgeChunk.objects.filter(
         user=user,
         embedding__isnull=False,
-    )
+    ).filter(Q(note__isnull=True) | Q(note__deleted_at__isnull=True))
     contextual_filters = []
     if video is not None:
         video_filter = Q(
@@ -302,7 +303,7 @@ def retrieve_scoped_knowledge(
         personal_candidates = KnowledgeChunk.objects.filter(
             user=request.user,
             embedding__isnull=False,
-        )
+        ).filter(Q(note__isnull=True) | Q(note__deleted_at__isnull=True))
         # At most len(video_results) top personal matches can overlap these.
         personal_results = _rank_chunks(
             personal_candidates,
@@ -325,7 +326,7 @@ def retrieve_scoped_knowledge(
                     user=request.user,
                     folder=request.folder,
                     embedding__isnull=False,
-                ),
+                ).filter(Q(note__isnull=True) | Q(note__deleted_at__isnull=True)),
                 query_vector,
                 request.top_k,
             )
@@ -350,6 +351,7 @@ def retrieve_scoped_knowledge(
                 KnowledgeChunk.objects.filter(
                     user=request.user,
                     folder=request.folder,
+                    note__deleted_at__isnull=True,
                 ).values_list("pk", flat=True)
             )
         personal_candidates = personal_candidates.exclude(pk__in=contextual_ids)

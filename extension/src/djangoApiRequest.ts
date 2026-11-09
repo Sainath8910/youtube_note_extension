@@ -2,7 +2,41 @@ import type { AuthResult } from "./backgroundAuth";
 
 export type AccessTokenProvider = () => Promise<AuthResult<string | null>>;
 
-const DJANGO_API_ORIGIN = "http://localhost:8000";
+const LOCAL_DJANGO_API_ORIGIN = "http://localhost:8000";
+
+function getDjangoApiOrigin(): string {
+  const configuredOrigin =
+    import.meta.env.VITE_DJANGO_API_ORIGIN?.trim() ||
+    (import.meta.env.DEV ? LOCAL_DJANGO_API_ORIGIN : "");
+  if (!configuredOrigin) {
+    throw new Error("VITE_DJANGO_API_ORIGIN must be configured.");
+  }
+
+  let url: URL;
+  try {
+    url = new URL(configuredOrigin);
+  } catch {
+    throw new Error("VITE_DJANGO_API_ORIGIN must be a valid origin.");
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("VITE_DJANGO_API_ORIGIN must be a valid origin.");
+  }
+  return url.origin;
+}
+
+export function djangoApiUrl(path: string): string {
+  if (!path.startsWith("/api/")) {
+    throw new Error("Django API requests must use an /api/ path.");
+  }
+  return new URL(path, getDjangoApiOrigin()).toString();
+}
 
 function isJwtAccessTokenCandidate(token: string): boolean {
   const segments = token.split(".");
@@ -24,7 +58,7 @@ export function fetchDjangoApi(
       throw new Error("Django API requests must use the configured API origin.");
     }
     if (
-      url.origin !== DJANGO_API_ORIGIN ||
+      url.origin !== getDjangoApiOrigin() ||
       !url.pathname.startsWith("/api/")
     ) {
       throw new Error("Django API requests must use the configured API origin.");

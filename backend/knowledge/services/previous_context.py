@@ -413,6 +413,7 @@ def _concept_knowledge(
     candidates = KnowledgeChunk.objects.filter(
         user=user,
         note__isnull=False,
+        note__deleted_at__isnull=True,
         note__user=user,
         source_type=KnowledgeChunk.SourceType.NOTE,
         embedding__isnull=False,
@@ -584,6 +585,7 @@ def get_previous_context(
         candidates = KnowledgeChunk.objects.filter(
             user=user,
             note__isnull=False,
+            note__deleted_at__isnull=True,
             source_type=KnowledgeChunk.SourceType.NOTE,
             embedding__isnull=False,
         ).exclude(note__video=video)

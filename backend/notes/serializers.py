@@ -36,6 +36,7 @@ class NoteSerializer(serializers.ModelSerializer):
         model = Note
         fields = [
             "id",
+            "sync_uuid",
             "title",
             "document",
             "content",
@@ -50,6 +51,7 @@ class NoteSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id",
+            "sync_uuid",
             "created_at",
             "updated_at",
         ]
@@ -58,7 +60,9 @@ class NoteSerializer(serializers.ModelSerializer):
         fields = super().get_fields()
         request = self.context.get("request")
         if request is not None and request.user.is_authenticated:
-            fields["folder"].queryset = Folder.objects.filter(user=request.user)
+            fields["folder"].queryset = Folder.objects.filter(
+                user=request.user, deleted_at__isnull=True
+            )
         return fields
 
     def get_folder_path(self, note):
@@ -80,6 +84,7 @@ class NoteSerializer(serializers.ModelSerializer):
                 folder["id"]: folder
                 for folder in Folder.objects.filter(
                     user_id=note.user_id,
+                    deleted_at__isnull=True,
                 ).values("id", "name", "parent_id")
             }
             cache = {"folders": folders, "paths": {}}

@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     "notes",
     "questions",
     "knowledge",
+    "sync_bridge.apps.SyncBridgeConfig",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -189,3 +190,10 @@ ENABLE_DEV_HEADER_AUTH = (
     and os.environ.get("ENABLE_DEV_HEADER_AUTH", "false").strip().lower()
     in {"1", "true", "yes", "on"}
 )
+
+NOTES_SYNC_PEER_URL = os.environ.get("NOTES_SYNC_PEER_URL", "").rstrip("/")
+NOTES_SYNC_PEER_SECRET = os.environ.get("NOTES_SYNC_PEER_SECRET", "")
+NOTES_SYNC_PEER_INSTALLATION_ID = os.environ.get(
+    "NOTES_SYNC_PEER_INSTALLATION_ID", ""
+)
+NOTES_SYNC_INSTALLATION_ID = os.environ.get("NOTES_SYNC_INSTALLATION_ID", "")

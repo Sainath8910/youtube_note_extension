@@ -2,7 +2,7 @@ import {
   dispatchAuthRuntimeMessage,
   getBackgroundAuth,
 } from "./backgroundAuth";
-import { fetchDjangoApi } from "./djangoApiRequest";
+import { djangoApiUrl, fetchDjangoApi } from "./djangoApiRequest";
 import { isTrustedProfileRequestSender } from "./profileApi";
 
 const backgroundAuth = getBackgroundAuth();
@@ -291,7 +291,7 @@ async function respondToConversationRequest(
 ): Promise<void> {
   try {
     const response = await fetchDjangoApiWithAuth(
-      `http://localhost:8000/api/knowledge/conversations/${path}`,
+      djangoApiUrl(`/api/knowledge/conversations/${path}`),
       {
         method,
         headers: {
@@ -339,7 +339,7 @@ async function respondToFolderRequest(
 ): Promise<void> {
   try {
     const response = await fetchDjangoApiWithAuth(
-      `http://localhost:8000/api/folders/${path}`,
+      djangoApiUrl(`/api/folders/${path}`),
       {
         method,
         headers: {
@@ -377,6 +377,45 @@ async function respondToFolderRequest(
   }
 }
 
+async function respondToTrashRequest(
+  path: string,
+  method: "GET" | "POST",
+  sendResponse: (response: unknown) => void,
+): Promise<void> {
+  try {
+    const response = await fetchDjangoApiWithAuth(
+      djangoApiUrl(`/api/notes/${path}`),
+      { method, headers: { "Content-Type": "application/json" } },
+    );
+    const responseText = await response.text();
+    let responseData: unknown = null;
+    if (responseText) {
+      try {
+        responseData = JSON.parse(responseText);
+      } catch {
+        sendResponse({
+          success: false,
+          status: response.ok ? 502 : response.status,
+          data: { detail: "The Trash service returned invalid JSON." },
+        });
+        return;
+      }
+    }
+    sendResponse({
+      success: response.ok,
+      status: response.status,
+      data: responseData,
+    });
+  } catch (error) {
+    console.error("[YouTube Knowledge] Trash request failed:", error);
+    sendResponse({
+      success: false,
+      status: 0,
+      data: { detail: "Could not reach the Trash service." },
+    });
+  }
+}
+
 async function respondToProfileRequest(
   method: "GET" | "PATCH",
   data: { username: string } | undefined,
@@ -384,7 +423,7 @@ async function respondToProfileRequest(
 ): Promise<void> {
   try {
     const response = await fetchDjangoApiWithAuth(
-      "http://localhost:8000/api/users/profile/",
+      djangoApiUrl("/api/users/profile/"),
       {
         method,
         headers: {
@@ -428,7 +467,7 @@ async function respondToVideoRequest(
 ): Promise<void> {
   try {
     const response = await fetchDjangoApiWithAuth(
-      `http://localhost:8000/api/videos/${path}`,
+      djangoApiUrl(`/api/videos/${path}`),
       { method: "GET" },
     );
     const responseText = await response.text();
@@ -471,6 +510,71 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse,
     )
   ) {
+    return true;
+  }
+
+  if (isRecord(message) && message.type === "SYNC_BRIDGE_REQUEST") {
+    const senderUrl = parseSenderUrl(sender.url);
+    const dashboardUrl = new URL(chrome.runtime.getURL("index.html"));
+    const trustedSender =
+      sender.id === chrome.runtime.id &&
+      senderUrl?.origin === dashboardUrl.origin &&
+      senderUrl.pathname === dashboardUrl.pathname &&
+      senderUrl.search === "";
+    const method = message.method;
+    const requestMethod =
+      method === "GET" || method === "POST" ? method : null;
+    const path = message.path;
+    const pathAllowed =
+      (requestMethod === "GET" &&
+        typeof path === "string" &&
+        ["/api/sync/v1/status/", "/api/sync/v1/history/",
+          "/api/sync/v1/conflicts/", "/api/sync/v1/indexing/",
+          "/api/sync/v1/identities/"].includes(path)) ||
+      (requestMethod === "POST" &&
+        typeof path === "string" &&
+        (["/api/sync/v1/preview/", "/api/sync/v1/reconcile/",
+          "/api/sync/v1/indexing/"].includes(path) ||
+          /^\/api\/sync\/v1\/conflicts\/\d+\/resolve\/$/.test(path) ||
+          /^\/api\/sync\/v1\/runs\/[0-9a-f-]{36}\/retry-acknowledgments\/$/i.test(path) ||
+          /^\/api\/sync\/v1\/runs\/[0-9a-f-]{36}\/confirm\/$/i.test(path)));
+    if (
+      !trustedSender ||
+      requestMethod === null ||
+      !pathAllowed ||
+      (requestMethod === "POST" && !isRecord(message.data))
+    ) {
+      sendResponse({
+        success: false,
+        status: 400,
+        data: { detail: "The Notes Bridge request is not allowed." },
+      });
+      return true;
+    }
+
+    void fetchDjangoApiWithAuth(djangoApiUrl(path), {
+      method: requestMethod,
+      headers: requestMethod === "POST" ? { "Content-Type": "application/json" } : {},
+      ...(requestMethod === "POST" ? { body: JSON.stringify(message.data) } : {}),
+    })
+      .then(async (response) => {
+        const text = await response.text();
+        let data: unknown;
+        try {
+          data = text ? JSON.parse(text) : null;
+        } catch {
+          throw new Error("The Notes Bridge API returned invalid JSON.");
+        }
+        sendResponse({ success: response.ok, status: response.status, data });
+      })
+      .catch((error: unknown) => {
+        console.error("[YouTube Knowledge] Notes Bridge request failed:", error);
+        sendResponse({
+          success: false,
+          status: 0,
+          data: { detail: "Could not reach the Notes Bridge service." },
+        });
+      });
     return true;
   }
 
@@ -691,6 +795,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "LIST_TRASH") {
+    void respondToTrashRequest("trash/", "GET", sendResponse);
+    return true;
+  }
+
+  if (message.type === "RESTORE_TRASH") {
+    const entity = message.entity;
+    const itemId = message.itemId;
+    if (
+      (entity !== "note" && entity !== "folder") ||
+      typeof itemId !== "number" ||
+      !Number.isSafeInteger(itemId) ||
+      itemId < 1
+    ) {
+      sendResponse({
+        success: false,
+        status: 400,
+        data: { detail: "A valid Trash item is required." },
+      });
+      return;
+    }
+    void respondToTrashRequest(
+      `trash/${entity}/${encodeURIComponent(String(itemId))}/restore/`,
+      "POST",
+      sendResponse,
+    );
+    return true;
+  }
+
   if (message.type === "CREATE_FOLDER") {
     if (
       typeof message.data !== "object" ||
@@ -785,7 +918,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     fetchDjangoApiWithAuth(
-      `http://localhost:8000/api/notes/${encodeURIComponent(String(noteId))}/assistance/`,
+      djangoApiUrl(`/api/notes/${encodeURIComponent(String(noteId))}/assistance/`),
       {
         method: "POST",
         headers: {
@@ -939,7 +1072,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    fetchDjangoApiWithAuth("http://localhost:8000/api/knowledge/ask/", {
+    fetchDjangoApiWithAuth(djangoApiUrl("/api/knowledge/ask/"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -992,7 +1125,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    fetchDjangoApiWithAuth("http://localhost:8000/api/knowledge/previous-context/jobs/", {
+    fetchDjangoApiWithAuth(djangoApiUrl("/api/knowledge/previous-context/jobs/"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1044,7 +1177,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     fetchDjangoApiWithAuth(
-      `http://localhost:8000/api/knowledge/previous-context/jobs/${encodeURIComponent(jobId)}/`,
+      djangoApiUrl(`/api/knowledge/previous-context/jobs/${encodeURIComponent(jobId)}/`),
       {
         method: "GET",
         headers: {
@@ -1088,7 +1221,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
    * --------------------------------------------------
    */
   if (message.type === "GET_NOTES") {
-    fetchDjangoApiWithAuth("http://localhost:8000/api/notes/", {
+    fetchDjangoApiWithAuth(djangoApiUrl("/api/notes/"), {
       method: "GET",
       headers: {
       },
@@ -1148,7 +1281,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    fetchDjangoApiWithAuth(`http://localhost:8000/api/videos/${videoId}/`, {
+    fetchDjangoApiWithAuth(djangoApiUrl(`/api/videos/${videoId}/`), {
       method: "GET",
       headers: {
       },
@@ -1198,7 +1331,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     fetchDjangoApiWithAuth(
-      `http://localhost:8000/api/videos/${encodeURIComponent(videoId)}/analyze/`,
+      djangoApiUrl(`/api/videos/${encodeURIComponent(videoId)}/analyze/`),
       {
         method: "POST",
         headers: {
@@ -1268,7 +1401,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     fetchDjangoApiWithAuth(
-      `http://localhost:8000/api/videos/${encodeURIComponent(videoId)}/transcript/`,
+      djangoApiUrl(`/api/videos/${encodeURIComponent(videoId)}/transcript/`),
       {
         method: "POST",
         headers: {
@@ -1354,7 +1487,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    fetchDjangoApiWithAuth("http://localhost:8000/api/notes/", {
+    fetchDjangoApiWithAuth(djangoApiUrl("/api/notes/"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1435,7 +1568,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    fetchDjangoApiWithAuth("http://localhost:8000/api/notes/video/", {
+    fetchDjangoApiWithAuth(djangoApiUrl("/api/notes/video/"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1508,7 +1641,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    fetchDjangoApiWithAuth(`http://localhost:8000/api/notes/${noteId}/`, {
+    fetchDjangoApiWithAuth(djangoApiUrl(`/api/notes/${noteId}/`), {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
@@ -1557,7 +1690,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    fetchDjangoApiWithAuth(`http://localhost:8000/api/notes/${noteId}/`, {
+    fetchDjangoApiWithAuth(djangoApiUrl(`/api/notes/${noteId}/`), {
       method: "DELETE",
       headers: {
       },

@@ -24,6 +24,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  ArrowLeftRight,
   Search,
   Save,
   Sparkles,
@@ -112,6 +113,8 @@ import {
 } from "./VideosPage";
 import { listDashboardVideos, type LibraryVideo } from "./videoApi";
 import { ProfilePage } from "./ProfilePage";
+import { TrashPage } from "./TrashPage";
+import { SyncBridgePage } from "./SyncBridgePage";
 import type { AuthActionResult } from "./authFlow";
 
 type DashboardRoute =
@@ -121,7 +124,9 @@ type DashboardRoute =
   | "folders"
   | "search"
   | "knowledge"
-  | "profile";
+  | "profile"
+  | "sync"
+  | "trash";
 
 type NoteWorkspaceLocation =
   | { mode: "new"; youtubeId?: string }
@@ -146,9 +151,11 @@ const navigation = [
   { route: "notes", label: "Notes", icon: FileText },
   { route: "videos", label: "Videos", icon: Clapperboard },
   { route: "folders", label: "Folders", icon: Folder },
+  { route: "trash", label: "Trash", icon: Trash2 },
   { route: "search", label: "Search", icon: Search },
   { route: "knowledge", label: "AI / Knowledge", icon: Brain },
   { route: "profile", label: "Profile", icon: UserRound },
+  { route: "sync", label: "Notes Bridge", icon: ArrowLeftRight },
 ] as const satisfies ReadonlyArray<{
   route: DashboardRoute;
   label: string;
@@ -169,6 +176,11 @@ const routeContent: Record<
     description: "Keep related learning together.",
     message: "",
   },
+  trash: {
+    title: "Trash",
+    description: "Restore notes and folders within 30 days.",
+    message: "",
+  },
   search: {
     title: "Search",
     description: "Find folders and notes by folder name or note title.",
@@ -182,6 +194,11 @@ const routeContent: Record<
   profile: {
     title: "Profile",
     description: "Manage your account details and password.",
+    message: "",
+  },
+  sync: {
+    title: "Notes Bridge",
+    description: "Review and transfer your notes and folders between your AI and Non-AI projects.",
     message: "",
   },
 };
@@ -781,6 +798,10 @@ function Dashboard({
               onChangePassword={onChangePassword}
               onSendPasswordRecovery={onSendPasswordRecovery}
             />
+          ) : route === "sync" ? (
+            <SyncBridgePage />
+          ) : route === "trash" ? (
+            <TrashPage />
           ) : route === "dashboard" ||
             route === "folders" ||
             route === "videos" ||
@@ -3007,7 +3028,7 @@ function NoteWorkspace({
   };
 
   const handleDeleteNote = async () => {
-    if (!note || !window.confirm(`Delete "${note.title}"? This cannot be undone.`)) {
+    if (!note || !window.confirm(`Move "${note.title}" to Trash? You can restore it within 30 days.`)) {
       return;
     }
 
@@ -3242,7 +3263,7 @@ function NoteWorkspace({
                   disabled={isDeleting}
                 >
                   <Trash2 size={15} aria-hidden="true" />
-                  {isDeleting ? "Deleting…" : "Delete"}
+                  {isDeleting ? "Moving…" : "Move to Trash"}
                 </button>
               </div>
             )}
@@ -5131,10 +5152,10 @@ function FolderDetailPage({
               className="folder-delete-confirmation"
               aria-labelledby="folder-delete-title"
             >
-              <h3 id="folder-delete-title">Delete this folder?</h3>
+              <h3 id="folder-delete-title">Move this folder to Trash?</h3>
               <p>
-                The folder will be removed, but the notes inside it will not be
-                deleted. They will become unassigned.
+                Its subfolders and contained notes will move to Trash together.
+                You can restore the whole group within 30 days.
               </p>
               {deleteError && (
                 <div className="inline-state error-state" role="alert">
@@ -5163,7 +5184,7 @@ function FolderDetailPage({
                   onClick={() => void handleDelete()}
                   disabled={isDeleting}
                 >
-                  {isDeleting ? "Deleting…" : "Delete Folder"}
+                  {isDeleting ? "Moving…" : "Move to Trash"}
                 </button>
               </div>
             </section>
