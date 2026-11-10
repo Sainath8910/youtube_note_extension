@@ -448,10 +448,17 @@
 
 .video-detail-tabs {
   display: flex;
+  flex: 1 1 auto;
   min-width: 0;
   gap: 4px;
   overflow-x: auto;
-  scrollbar-width: thin;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+
+.video-detail-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .video-detail-tabs button {
@@ -559,10 +566,12 @@
   display: grid;
   max-height: min(65vh, 720px);
   gap: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   margin: 0;
   padding: 0;
   list-style: none;
+  scrollbar-width: thin;
 }
 
 .video-transcript-list li {

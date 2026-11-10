@@ -3,6 +3,8 @@ import {
   AlertCircle,
   ArrowDownUp,
   ArrowRight,
+  ChevronLeft,
+  ChevronRight,
   Check,
   CircleCheck,
   Download,
@@ -70,6 +72,7 @@ export function SyncBridgePage() {
   const [aiUuid, setAiUuid] = useState("");
   const [peerUuid, setPeerUuid] = useState("");
   const [mappingAction, setMappingAction] = useState<"pair" | "defer" | "separate">("pair");
+  const [selectedConflictId, setSelectedConflictId] = useState<number | null>(null);
 
   const applyLoadedData = useCallback((data: Awaited<ReturnType<typeof loadBridgeData>>) => {
     setStatus(data.status);
@@ -210,6 +213,7 @@ export function SyncBridgePage() {
       await resolveSyncConflict(conflict.id, choice);
       setMessage(`Conflict resolved using the ${choice === "keep_ai" ? "AI" : "Non-AI"} version.`);
       await refresh();
+      setSelectedConflictId(null);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Could not resolve the conflict.");
     } finally {
@@ -230,6 +234,21 @@ export function SyncBridgePage() {
     .filter((operation) => operation.status === "failed" || operation.acknowledgment === "pending")
     .map((operation) => operation.operation_id) ?? [];
   const lastSyncLabel = formatSyncDate(status?.last_successful_sync ?? null);
+  const selectedConflict = conflicts.find(
+    (conflict) => conflict.id === selectedConflictId,
+  );
+
+  if (selectedConflict) {
+    return (
+      <ConflictDetailPage
+        key={selectedConflict.id}
+        conflict={selectedConflict}
+        busy={busy}
+        onBack={() => setSelectedConflictId(null)}
+        onResolve={(choice) => void resolveConflict(selectedConflict, choice)}
+      />
+    );
+  }
 
   return (
     <div className="sync-bridge-page">
@@ -513,31 +532,11 @@ export function SyncBridgePage() {
         ) : (
           <ul className="sync-bridge-list">
             {conflicts.map((conflict) => (
-              <li className="sync-bridge-conflict" key={conflict.id}>
-                <strong>{conflict.entity} · {conflict.reason.replaceAll("_", " ")}</strong>
-                {conflict.reason === "destination_deleted" && (
-                  <p>The destination has a deletion record. Choose the live version to restore it there.</p>
-                )}
-                <code>AI: {conflict.local_uuid} · Non-AI: {conflict.peer_uuid ?? "unmapped"}</code>
-                <details>
-                  <summary>Review snapshots</summary>
-                  <pre>{JSON.stringify({ local: conflict.local, incoming: conflict.incoming }, null, 2)}</pre>
-                </details>
-                {conflict.peer_uuid && (
-                  <div className="sync-bridge-actions">
-                    <button className="workspace-secondary-button" type="button" disabled={busy} onClick={() => void resolveConflict(conflict, "keep_ai")}>
-                      {conflict.reason === "destination_deleted" && conflict.direction === "push"
-                        ? "Restore from AI to Non-AI"
-                        : "Keep AI version"}
-                    </button>
-                    <button className="workspace-secondary-button" type="button" disabled={busy} onClick={() => void resolveConflict(conflict, "keep_non_ai")}>
-                      {conflict.reason === "destination_deleted" && conflict.direction === "pull"
-                        ? "Restore from Non-AI to AI"
-                        : "Keep Non-AI version"}
-                    </button>
-                  </div>
-                )}
-              </li>
+              <ConflictReviewCard
+                key={conflict.id}
+                conflict={conflict}
+                onOpen={() => setSelectedConflictId(conflict.id)}
+              />
             ))}
           </ul>
         )}
@@ -573,7 +572,7 @@ export function SyncBridgePage() {
         <h2 className="sync-bridge-card-title"><ArrowDownUp size={18} aria-hidden="true" /> Recent sync history</h2>
         {history.length === 0 ? <p className="sync-bridge-empty">No sync operations yet.</p> : (
           <ul className="sync-bridge-list">
-            {history.slice(0, 20).map((entry, index) => {
+            {history.slice(0, 5).map((entry, index) => {
               const runId = typeof entry.run_id === "string" ? entry.run_id : null;
               return (
                 <li className="sync-bridge-row" key={runId ?? index}>
@@ -606,6 +605,519 @@ function hasPendingAcknowledgment(value: unknown): boolean {
     );
   }
   return isRecord(result.result) && result.result.acknowledgment === "pending";
+}
+
+function ConflictReviewCard({
+  conflict,
+  onOpen,
+}: {
+  conflict: SyncConflict;
+  onOpen: () => void;
+}) {
+  const differences = snapshotDifferences(conflict.local, conflict.incoming);
+  return (
+    <li className="sync-bridge-conflict sync-bridge-conflict-summary">
+      <button type="button" onClick={onOpen}>
+        <span className="sync-bridge-conflict-summary-copy">
+          <strong>{conflictTitle(conflict)}</strong>
+          <small>{capitalize(conflict.entity)} · {humanize(conflict.reason)}</small>
+        </span>
+        <span className="sync-bridge-conflict-summary-meta">
+          {differences.filter((difference) => difference.changed).length} differences
+          <ChevronRight size={17} aria-hidden="true" />
+        </span>
+      </button>
+    </li>
+  );
+}
+
+function ConflictDetailPage({
+  conflict,
+  busy,
+  onBack,
+  onResolve,
+}: {
+  conflict: SyncConflict;
+  busy: boolean;
+  onBack: () => void;
+  onResolve: (choice: "keep_ai" | "keep_non_ai") => void;
+}) {
+  const [selectedPath, setSelectedPath] = useState("");
+  const [showUnchanged, setShowUnchanged] = useState(false);
+  const differences = snapshotDifferences(conflict.local, conflict.incoming);
+  const changedDifferences = differences.filter((difference) => difference.changed);
+  const navigationDifferences = showUnchanged ? differences : changedDifferences;
+  const selectedDifference =
+    navigationDifferences.find((difference) => difference.path === selectedPath) ??
+    navigationDifferences[0];
+
+  return (
+    <div className="sync-bridge-conflict-detail-page">
+      <header className="sync-bridge-conflict-detail-header">
+        <button className="workspace-back-button" type="button" onClick={onBack}>
+          <ChevronLeft size={17} aria-hidden="true" />
+          Back to conflicts
+        </button>
+        <div>
+          <p className="sync-bridge-eyebrow">CONFLICT REVIEW</p>
+          <h1>{conflictTitle(conflict)}</h1>
+          <p>{capitalize(conflict.entity)} · {humanize(conflict.reason)}</p>
+        </div>
+        <span className="sync-bridge-conflict-count">
+          {changedDifferences.length} differences
+        </span>
+      </header>
+
+      {conflict.reason === "destination_deleted" && (
+        <p className="sync-bridge-conflict-notice">
+          The destination has a deletion record. Choosing the live version restores it there.
+        </p>
+      )}
+      <div className="sync-bridge-conflict-identities">
+        <span><strong>AI ID</strong><code>{conflict.local_uuid}</code></span>
+        <span><strong>Non-AI ID</strong><code>{conflict.peer_uuid ?? "Not mapped"}</code></span>
+      </div>
+
+      <div className="sync-bridge-conflict-detail-layout">
+        <aside className="sync-bridge-diff-sidebar" aria-label="Changed components">
+          <div className="sync-bridge-diff-sidebar-heading">
+            <h2>Changed components</h2>
+            <button
+              className="sync-bridge-diff-toggle"
+              type="button"
+              aria-pressed={showUnchanged}
+              onClick={() => {
+                setShowUnchanged((value) => !value);
+                setSelectedPath("");
+              }}
+            >
+              {showUnchanged ? "Changes only" : "Show all"}
+            </button>
+          </div>
+          {navigationDifferences.length === 0 ? (
+            <p className="sync-bridge-empty">
+              {differences.length === 0
+                ? "No snapshot fields are available to compare."
+                : "No different fields found."}
+            </p>
+          ) : (
+            <nav aria-label="Conflict fields">
+              {navigationDifferences.map((difference) => (
+                <button
+                  className={selectedDifference?.path === difference.path ? "is-active" : ""}
+                  type="button"
+                  key={difference.path}
+                  aria-current={selectedDifference?.path === difference.path ? "true" : undefined}
+                  onClick={() => setSelectedPath(difference.path)}
+                >
+                  <span className="sync-bridge-diff-sidebar-status" aria-hidden="true" />
+                  <span>{humanizePath(difference.path)}</span>
+                  <ChevronRight size={14} aria-hidden="true" />
+                </button>
+              ))}
+            </nav>
+          )}
+        </aside>
+
+        <main className="sync-bridge-diff-detail">
+          {selectedDifference ? (
+            <section className="sync-bridge-diff">
+              <div className="sync-bridge-diff-heading">
+                <div>
+                  <h2>{humanizePath(selectedDifference.path)}</h2>
+                  <p>
+                    {selectedDifference.changed
+                      ? "Compare the value from each workspace before choosing which version to keep."
+                      : "This field is the same in both workspaces."}
+                  </p>
+                </div>
+                <span className={`sync-bridge-diff-status${selectedDifference.changed ? " is-changed" : ""}`}>
+                  {selectedDifference.changed ? "Different" : "Same"}
+                </span>
+              </div>
+              <div className="sync-bridge-diff-sides">
+                <SnapshotSide
+                  label="AI workspace"
+                  value={selectedDifference.local}
+                  present={selectedDifference.localPresent}
+                  changed={selectedDifference.changed}
+                />
+                <SnapshotSide
+                  label="Non-AI workspace"
+                  value={selectedDifference.incoming}
+                  present={selectedDifference.incomingPresent}
+                  changed={selectedDifference.changed}
+                />
+              </div>
+            </section>
+          ) : (
+            <section className="sync-bridge-diff-empty">
+              <Check size={22} aria-hidden="true" />
+              <h2>No field differences</h2>
+              <p>The snapshots contain the same fields and values.</p>
+            </section>
+          )}
+        </main>
+      </div>
+
+      {conflict.peer_uuid && (
+        <div className="sync-bridge-actions sync-bridge-conflict-resolution-actions">
+          <button
+            className="workspace-secondary-button"
+            type="button"
+            disabled={busy}
+            onClick={() => onResolve("keep_ai")}
+          >
+            {conflict.reason === "destination_deleted" && conflict.direction === "push"
+              ? "Restore from AI to Non-AI"
+              : "Keep AI version"}
+          </button>
+          <button
+            className="workspace-secondary-button"
+            type="button"
+            disabled={busy}
+            onClick={() => onResolve("keep_non_ai")}
+          >
+            {conflict.reason === "destination_deleted" && conflict.direction === "pull"
+              ? "Restore from Non-AI to AI"
+              : "Keep Non-AI version"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function conflictTitle(conflict: SyncConflict): string {
+  const local = isRecord(conflict.local) ? conflict.local : {};
+  const incoming = isRecord(conflict.incoming) ? conflict.incoming : {};
+  const title =
+    [local.title, local.name, incoming.title, incoming.name].find(
+      (value) => typeof value === "string" && value.trim(),
+    );
+  return typeof title === "string" ? title : `Untitled ${conflict.entity}`;
+}
+
+interface SnapshotDifference {
+  path: string;
+  local: unknown;
+  incoming: unknown;
+  localPresent: boolean;
+  incomingPresent: boolean;
+  changed: boolean;
+}
+
+function snapshotDifferences(
+  local: unknown,
+  incoming: unknown,
+): SnapshotDifference[] {
+  const differences: SnapshotDifference[] = [];
+  const visit = (
+    left: unknown,
+    right: unknown,
+    path: string,
+    leftPresent: boolean,
+    rightPresent: boolean,
+  ) => {
+    if (isRecord(left) && isRecord(right)) {
+      const keys = [...new Set([...Object.keys(left), ...Object.keys(right)])].sort();
+      if (keys.length === 0 && path) {
+        differences.push({
+          path,
+          local: left,
+          incoming: right,
+          localPresent: leftPresent,
+          incomingPresent: rightPresent,
+          changed: false,
+        });
+      }
+      for (const key of keys) {
+        visit(
+          left[key],
+          right[key],
+          path ? `${path}.${key}` : key,
+          Object.prototype.hasOwnProperty.call(left, key),
+          Object.prototype.hasOwnProperty.call(right, key),
+        );
+      }
+      return;
+    }
+
+    differences.push({
+      path: path || "Record",
+      local: left,
+      incoming: right,
+      localPresent: leftPresent,
+      incomingPresent: rightPresent,
+      changed:
+        leftPresent !== rightPresent ||
+        stableSnapshotValue(left) !== stableSnapshotValue(right),
+    });
+  };
+
+  visit(local, incoming, "", local !== undefined, incoming !== undefined);
+  return differences;
+}
+
+function stableSnapshotValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableSnapshotValue).join(",")}]`;
+  }
+  if (isRecord(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableSnapshotValue(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? String(value);
+}
+
+function SnapshotSide({
+  label,
+  value,
+  present,
+  changed,
+}: {
+  label: string;
+  value: unknown;
+  present: boolean;
+  changed: boolean;
+}) {
+  return (
+    <section className={`sync-bridge-diff-side${changed ? " is-changed" : ""}`}>
+      <h5>{label}</h5>
+      {present ? (
+        <SnapshotValue value={value} />
+      ) : (
+        <span className="sync-bridge-diff-missing">Not present in this version</span>
+      )}
+    </section>
+  );
+}
+
+function SnapshotValue({ value }: { value: unknown }) {
+  if (value === null || value === undefined) {
+    return <span className="sync-bridge-value-empty">Not set</span>;
+  }
+  if (typeof value === "boolean") {
+    return <span className="sync-bridge-value-boolean">{value ? "Yes" : "No"}</span>;
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    return (
+      <p className="sync-bridge-value-text">
+        {typeof value === "string" && value.length === 0 ? "Empty" : String(value)}
+      </p>
+    );
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span className="sync-bridge-value-empty">No items</span>;
+    return <SnapshotArray items={value} />;
+  }
+  if (isNoteBlock(value)) {
+    return <SnapshotNoteBlock block={value} />;
+  }
+  if (isRecord(value)) {
+    const entries = Object.entries(value);
+    if (entries.length === 0) return <span className="sync-bridge-value-empty">No details</span>;
+    return (
+      <dl className="sync-bridge-value-object">
+        {entries.map(([key, entry]) => (
+          <div key={key}>
+            <dt>{humanize(key)}</dt>
+            <dd><SnapshotValue value={entry} /></dd>
+          </div>
+        ))}
+      </dl>
+    );
+  }
+  return <span className="sync-bridge-value-empty">Unsupported value</span>;
+}
+
+function SnapshotArray({ items }: { items: unknown[] }) {
+  const [open, setOpen] = useState(items.length <= 6);
+  const list = (
+    <ul className="sync-bridge-value-list">
+      {items.map((item, index) => (
+        <li key={index}><SnapshotValue value={item} /></li>
+      ))}
+    </ul>
+  );
+  if (items.length <= 6) return list;
+  return (
+    <details
+      className="sync-bridge-value-details"
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>{items.length} items</summary>
+      {open && list}
+    </details>
+  );
+}
+
+interface SnapshotNoteBlock {
+  type: string;
+  content: string;
+  metadata?: Record<string, unknown>;
+}
+
+function isNoteBlock(value: unknown): value is SnapshotNoteBlock {
+  return (
+    isRecord(value) &&
+    typeof value.type === "string" &&
+    typeof value.content === "string" &&
+    [
+      "paragraph",
+      "heading",
+      "equation",
+      "timestamp",
+      "image",
+      "url",
+      "code",
+      "command",
+      "bullet_list",
+      "numbered_list",
+      "table",
+      "checklist",
+      "screenshot",
+    ].includes(value.type)
+  );
+}
+
+function SnapshotNoteBlock({ block }: { block: SnapshotNoteBlock }) {
+  const metadata = isRecord(block.metadata) ? block.metadata : {};
+  const checklist = Array.isArray(metadata.checklist_items)
+    ? metadata.checklist_items.filter(
+        (item): item is Record<string, unknown> =>
+          isRecord(item) &&
+          typeof item.text === "string" &&
+          typeof item.checked === "boolean",
+      )
+    : [];
+  const tableRows = Array.isArray(metadata.table_rows)
+    ? metadata.table_rows.filter(
+        (row): row is unknown[] =>
+          Array.isArray(row) && row.every((cell) => typeof cell === "string"),
+      )
+    : [];
+  const imageSource = noteBlockImageSource(block, metadata);
+  const alt = typeof metadata.alt === "string" ? metadata.alt : "";
+
+  if (block.type === "image" || block.type === "screenshot") {
+    return imageSource ? (
+      <figure className="sync-bridge-note-image">
+        <img src={imageSource} alt={alt || (block.type === "screenshot" ? "Video screenshot" : "Note image")} loading="lazy" />
+        {alt && <figcaption>{alt}</figcaption>}
+      </figure>
+    ) : (
+      <p className="sync-bridge-value-text">
+        {alt || block.content || "Image is not available in this snapshot."}
+      </p>
+    );
+  }
+  if (block.type === "checklist") {
+    return checklist.length > 0 ? (
+      <ul className="sync-bridge-note-checklist">
+        {checklist.map((item, index) => (
+          <li key={typeof item.id === "string" ? item.id : index}>
+            <input type="checkbox" checked={item.checked === true} readOnly aria-label={item.checked ? "Completed" : "Not completed"} />
+            <span>{String(item.text)}</span>
+          </li>
+        ))}
+      </ul>
+    ) : (
+      <span className="sync-bridge-value-empty">No checklist items</span>
+    );
+  }
+  if (block.type === "table") {
+    return tableRows.length > 0 ? (
+      <div className="sync-bridge-note-table-scroll">
+        <table className="sync-bridge-note-table">
+          {metadata.table_has_header === true && tableRows[0] && (
+            <thead>
+              <tr>{tableRows[0].map((cell, index) => <th key={index}>{String(cell)}</th>)}</tr>
+            </thead>
+          )}
+          <tbody>
+            {tableRows
+              .slice(metadata.table_has_header === true ? 1 : 0)
+              .map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {row.map((cell, cellIndex) => <td key={cellIndex}>{String(cell)}</td>)}
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+    ) : (
+      <span className="sync-bridge-value-empty">No table rows</span>
+    );
+  }
+  if (block.type === "bullet_list" || block.type === "numbered_list") {
+    const items = block.content.split(/\r?\n/).map((line) =>
+      line.replace(/^(?:(?:[-*+•])\s+|\d+[.)]\s+)/, "").trim(),
+    ).filter(Boolean);
+    const List = block.type === "bullet_list" ? "ul" : "ol";
+    return items.length > 0 ? (
+      <List className="sync-bridge-note-list">{items.map((item, index) => <li key={index}>{item}</li>)}</List>
+    ) : <span className="sync-bridge-value-empty">Empty list</span>;
+  }
+  if (block.type === "url") {
+    const href = safeHttpUrl(block.content || metadata.url);
+    return href ? (
+      <a className="sync-bridge-note-link" href={href} target="_blank" rel="noreferrer">
+        {typeof metadata.title === "string" && metadata.title ? metadata.title : href}
+      </a>
+    ) : (
+      <p className="sync-bridge-value-text">{block.content || "No link"}</p>
+    );
+  }
+  if (block.type === "code" || block.type === "command" || block.type === "equation") {
+    return <pre className="sync-bridge-note-code">{block.content || "Empty"}</pre>;
+  }
+  if (block.type === "heading") {
+    return <h5 className="sync-bridge-note-heading">{block.content || "Empty heading"}</h5>;
+  }
+  return <p className="sync-bridge-value-text">{block.content || "Empty"}</p>;
+}
+
+function noteBlockImageSource(
+  block: SnapshotNoteBlock,
+  metadata: Record<string, unknown>,
+): string {
+  const candidate =
+    typeof metadata.image === "string"
+      ? metadata.image
+      : typeof metadata.url === "string"
+        ? metadata.url
+        : block.content;
+  if (candidate.startsWith("data:image/")) return candidate;
+  return safeHttpUrl(candidate);
+}
+
+function safeHttpUrl(value: unknown): string {
+  if (typeof value !== "string") return "";
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function humanize(value: string): string {
+  return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toLocaleUpperCase());
+}
+
+function humanizePath(value: string): string {
+  return value
+    .replace(/\[(\d+)\]/g, " item $1")
+    .split(".")
+    .map(humanize)
+    .join(" › ");
+}
+
+function capitalize(value: string): string {
+  return value.charAt(0).toLocaleUpperCase() + value.slice(1);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
