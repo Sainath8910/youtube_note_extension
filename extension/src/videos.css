@@ -450,10 +450,13 @@
   display: flex;
   min-width: 0;
   gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 .video-detail-tabs button {
   position: relative;
+  flex: 0 0 auto;
   min-height: 42px;
   padding: 0 12px;
   color: #8697ac;
@@ -828,6 +831,16 @@
 }
 
 @media (max-width: 680px) {
+  .video-library-toolbar,
+  .video-detail-toolbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .video-library-actions {
+    flex-wrap: wrap;
+  }
+
   .video-library-card {
     grid-template-columns: minmax(88px, 122px) minmax(0, 1fr);
     gap: 11px;

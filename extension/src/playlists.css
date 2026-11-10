@@ -495,7 +495,18 @@
   }
 }
 
+@media (max-width: 620px) {
+  .playlist-list-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 @media (max-width: 520px) {
+  .playlist-picker-dialog.is-create .playlist-picker-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .playlist-video-row {
     grid-template-columns: minmax(0, 1fr) auto;
   }

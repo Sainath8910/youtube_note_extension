@@ -5374,6 +5374,10 @@ a.analysis-display-timestamp-item:hover {
 }
 
 @media (max-width: 620px) {
+  .trash-page-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .trash-page-heading,
   .trash-page-item {
     align-items: flex-start;

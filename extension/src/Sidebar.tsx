@@ -288,9 +288,23 @@ function clampPosition(
   };
 }
 
+function getSidebarWidth(): number {
+  return Math.min(
+    SIDEBAR_WIDTH,
+    Math.max(MINIMIZED_SIZE, window.innerWidth - 20),
+  );
+}
+
+function getSidebarHeight(): number {
+  return Math.max(
+    MINIMIZED_SIZE,
+    window.innerHeight - SIDEBAR_HEIGHT_MARGIN,
+  );
+}
+
 function getDefaultPosition(): Position {
   return {
-    x: Math.max(10, window.innerWidth - SIDEBAR_WIDTH - 20),
+    x: Math.max(10, window.innerWidth - getSidebarWidth() - 20),
     y: 15,
   };
 }
@@ -329,8 +343,8 @@ async function loadPosition(): Promise<Position> {
                 x: stored.x,
                 y: stored.y,
               },
-              SIDEBAR_WIDTH,
-              window.innerHeight - SIDEBAR_HEIGHT_MARGIN,
+              getSidebarWidth(),
+              getSidebarHeight(),
             ),
           );
           return;
@@ -4265,6 +4279,20 @@ export default function Sidebar({
   }, []);
 
   useEffect(() => {
+    const handleResize = () => {
+      setPosition((current) =>
+        clampPosition(
+          current,
+          minimized ? MINIMIZED_SIZE : getSidebarWidth(),
+          minimized ? MINIMIZED_SIZE : getSidebarHeight(),
+        ),
+      );
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [minimized]);
+
+  useEffect(() => {
     setCurrentNotes(notes);
   }, [notes]);
 
@@ -4372,8 +4400,8 @@ export default function Sidebar({
   function updatePosition(nextPosition: Position) {
     const next = clampPosition(
       nextPosition,
-      minimized ? MINIMIZED_SIZE : SIDEBAR_WIDTH,
-      minimized ? MINIMIZED_SIZE : window.innerHeight - SIDEBAR_HEIGHT_MARGIN,
+      minimized ? MINIMIZED_SIZE : getSidebarWidth(),
+      minimized ? MINIMIZED_SIZE : getSidebarHeight(),
     );
 
     setPosition(next);
@@ -4820,9 +4848,9 @@ export default function Sidebar({
         position: "fixed",
         left: position.x,
         top: position.y,
-        width: SIDEBAR_WIDTH,
-        height: "calc(100vh - 30px)",
-        maxHeight: "calc(100vh - 30px)",
+        width: getSidebarWidth(),
+        height: getSidebarHeight(),
+        maxHeight: getSidebarHeight(),
         zIndex: 2147483647,
         background: colors.panel,
         color: colors.text,
