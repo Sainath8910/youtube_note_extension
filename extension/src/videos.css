@@ -507,6 +507,47 @@
   min-height: 32px;
 }
 
+.video-transcript-full {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(34, 48, 68, 0.9);
+  border-radius: 9px;
+  background: rgba(16, 26, 41, 0.72);
+}
+
+.video-transcript-full summary {
+  color: #e2edf7;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  list-style: none;
+}
+
+.video-transcript-full summary::-webkit-details-marker {
+  display: none;
+}
+
+.video-transcript-full summary::before {
+  display: inline-block;
+  width: 1.2em;
+  color: #78d9e5;
+  content: "+";
+}
+
+.video-transcript-full[open] summary::before {
+  content: "−";
+}
+
+.video-transcript-full p {
+  margin: 0;
+  color: #c0ccd9;
+  font-size: 10px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .transcript-search-field {
   max-width: 440px;
 }

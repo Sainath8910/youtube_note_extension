@@ -17,6 +17,7 @@ from .models import (
 )
 from .peer_client import PeerCommunicationError, peer_request
 from .services import apply_change, installation_uuid, snapshot_rows
+from playlists.models import Playlist
 
 
 def _peer_snapshot(access_token):
@@ -816,7 +817,7 @@ class BridgeReconcileView(APIView):
             action = request.data["action"]
         except (KeyError, ValueError, TypeError):
             return Response({"detail": "Invalid reconciliation request."}, status=400)
-        if direction not in {"push", "pull"} or entity not in {"note", "folder"}:
+        if direction not in {"push", "pull"} or entity not in {"note", "folder", "playlist"}:
             return Response({"detail": "Unsupported reconciliation target."}, status=400)
         if action not in {"pair", "separate", "defer"}:
             return Response({"detail": "Unsupported reconciliation action."}, status=400)

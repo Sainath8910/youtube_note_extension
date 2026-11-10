@@ -6,13 +6,14 @@ from sync_bridge.services import write_change
 
 
 class Command(BaseCommand):
-    help = "Permanently delete Notes and Folders after their 30-day trash period."
+    help = "Permanently delete notes, folders, and playlists after 30 days in Trash."
 
     @transaction.atomic
     def handle(self, *args, **options):
-        notes, folders = expired_trash()
+        notes, folders, playlists = expired_trash()
         deleted_notes = 0
         deleted_folders = 0
+        deleted_playlists = 0
 
         for note in notes.select_related("user").iterator(chunk_size=100):
             write_change(
@@ -53,9 +54,21 @@ class Command(BaseCommand):
             folder.delete()
             deleted_folders += 1
 
+        for playlist in playlists.select_related("user").iterator(chunk_size=100):
+            write_change(
+                playlist.user,
+                "playlist",
+                playlist.sync_uuid,
+                {"deleted_at": playlist.deleted_at.isoformat()},
+                deleted=True,
+            )
+            playlist.delete()
+            deleted_playlists += 1
+
         self.stdout.write(
             self.style.SUCCESS(
                 f"Permanently deleted {deleted_notes} note(s) and "
-                f"{deleted_folders} folder(s)."
+                f"{deleted_folders} folder(s) and "
+                f"{deleted_playlists} playlist(s)."
             )
         )

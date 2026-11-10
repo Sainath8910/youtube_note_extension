@@ -16,6 +16,7 @@ from videos.services.youtube import (
     YouTubeMetadataError,
     fetch_youtube_metadata,
 )
+from playlists.services import add_video_to_youtube_playlist
 
 from .models import Note
 from .serializers import NoteAssistanceRequestSerializer, NoteSerializer
@@ -163,6 +164,12 @@ class VideoNoteCreateView(generics.CreateAPIView):
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         data = request.data.copy()
+        playlist_id = data.pop("youtube_playlist_id", None)
+        playlist_title = data.pop("youtube_playlist_title", "")
+        playlist_thumbnail = data.pop("youtube_playlist_thumbnail_url", "")
+        playlist_channel = data.pop("youtube_playlist_channel_name", "")
+        playlist_videos = data.pop("youtube_playlist_videos", [])
+        playlist_position = data.pop("youtube_playlist_current_position", None)
 
         youtube_id = data.get("youtube_id")
 
@@ -236,6 +243,17 @@ class VideoNoteCreateView(generics.CreateAPIView):
             serializer,
             user=request.user,
         )
+        if playlist_id:
+            add_video_to_youtube_playlist(
+                user=request.user,
+                video=video,
+                playlist_id=playlist_id,
+                title=playlist_title,
+                thumbnail_url=playlist_thumbnail,
+                channel_name=playlist_channel,
+                playlist_videos=playlist_videos if isinstance(playlist_videos, list) else [],
+                current_position=playlist_position,
+            )
         return Response(
             {
                 "video_created": created,

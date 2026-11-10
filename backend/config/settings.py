@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     "folders",
     "videos",
     "notes",
+    "playlists.apps.PlaylistsConfig",
     "questions",
     "knowledge",
     "sync_bridge.apps.SyncBridgeConfig",

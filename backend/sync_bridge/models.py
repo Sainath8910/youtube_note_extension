@@ -14,6 +14,7 @@ class RecordState(models.Model):
     class Entity(models.TextChoices):
         NOTE = "note", "Note"
         FOLDER = "folder", "Folder"
+        PLAYLIST = "playlist", "Playlist"
 
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="sync_states"

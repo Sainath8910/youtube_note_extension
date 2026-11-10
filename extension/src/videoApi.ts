@@ -7,6 +7,7 @@ export type VideoAvailability =
   | "failed";
 export type VideoStatusFilter = "all" | VideoAvailability;
 export type VideoSortOrder = "added" | "updated" | "title" | "notes";
+export type PlaylistVideoFilter = "all" | "in_playlist" | "not_in_playlist";
 
 export interface VideoLibraryPage {
   count: number;
@@ -20,6 +21,8 @@ export interface VideoLibraryQuery {
   pageSize?: number;
   query?: string;
   transcriptFilter?: VideoStatusFilter;
+  playlistFilter?: PlaylistVideoFilter;
+  playlistId?: number;
   analysisFilter?: VideoStatusFilter;
   sort?: VideoSortOrder;
 }
@@ -189,6 +192,8 @@ export function listDashboardVideos(
     pageSize: query.pageSize ?? 10,
     query: query.query ?? "",
     transcriptFilter: query.transcriptFilter ?? "all",
+    playlistFilter: query.playlistFilter ?? "all",
+    playlistId: query.playlistId ?? null,
     analysisFilter: query.analysisFilter ?? "all",
     sort: query.sort ?? "updated",
   });

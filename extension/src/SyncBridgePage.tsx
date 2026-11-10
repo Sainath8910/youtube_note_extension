@@ -2,9 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import {
   AlertCircle,
   ArrowDownUp,
+  ArrowRight,
   Check,
   CircleCheck,
   Download,
+  Link2,
   Radar,
   RefreshCw,
   Upload,
@@ -39,6 +41,16 @@ async function loadBridgeData() {
   return { status, conflicts, history, identityCandidates };
 }
 
+function formatSyncDate(value: string | null): string {
+  if (!value) return "No completed sync yet";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Date unavailable";
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
 export function SyncBridgePage() {
   const [status, setStatus] = useState<SyncBridgeStatus | null>(null);
   const [conflicts, setConflicts] = useState<SyncConflict[]>([]);
@@ -54,7 +66,7 @@ export function SyncBridgePage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [mappingDirection, setMappingDirection] = useState<"push" | "pull">("push");
-  const [mappingEntity, setMappingEntity] = useState<"note" | "folder">("note");
+  const [mappingEntity, setMappingEntity] = useState<"note" | "folder" | "playlist">("note");
   const [aiUuid, setAiUuid] = useState("");
   const [peerUuid, setPeerUuid] = useState("");
   const [mappingAction, setMappingAction] = useState<"pair" | "defer" | "separate">("pair");
@@ -217,9 +229,27 @@ export function SyncBridgePage() {
   const failedOperationIds = result?.results
     .filter((operation) => operation.status === "failed" || operation.acknowledgment === "pending")
     .map((operation) => operation.operation_id) ?? [];
+  const lastSyncLabel = formatSyncDate(status?.last_successful_sync ?? null);
 
   return (
     <div className="sync-bridge-page">
+      <header className="sync-bridge-hero">
+        <div className="sync-bridge-hero-icon" aria-hidden="true">
+          <Link2 size={22} />
+        </div>
+        <div className="sync-bridge-hero-copy">
+          <p className="sync-bridge-eyebrow">ACCOUNT CONNECTION</p>
+          <h1>Notes Bridge</h1>
+          <p>Keep your AI and Non-AI workspaces paired, and choose exactly what to transfer.</p>
+        </div>
+        <span className={`sync-bridge-connection-badge ${
+          status?.configured ? "is-connected" : status ? "is-disconnected" : ""
+        }`}>
+          <span aria-hidden="true" />
+          {status?.configured ? "Pairing saved" : status ? "Setup needed" : "Checking"}
+        </span>
+      </header>
+
       {error && (
         <div className="sync-bridge-alert is-error" role="alert">
           <AlertCircle size={18} aria-hidden="true" />
@@ -231,57 +261,64 @@ export function SyncBridgePage() {
       <section className={`content-card sync-bridge-card sync-bridge-connection ${
         status?.configured ? "is-connected" : "is-searching"
       }`}>
-        <div className="sync-bridge-section-heading">
-          <div>
-            <h2><ArrowDownUp size={19} aria-hidden="true" /> Connection</h2>
+        <div className="sync-bridge-connection-heading">
+          <div className="sync-bridge-connection-icon" aria-hidden="true">
+            {status?.configured ? <CircleCheck size={22} /> : <Radar size={22} />}
+          </div>
+          <div className="sync-bridge-connection-copy">
+            <p className="sync-bridge-eyebrow">PERSISTENT PAIRING</p>
+            <h2>
+              {status?.configured
+                ? "Your workspaces are paired"
+                : status
+                  ? "Pairing needs setup"
+                  : "Checking your pairing"}
+            </h2>
             <p>
-              PUSH copies AI notes and folders to Non-AI. PULL copies Non-AI
-              notes and folders to AI. Video notes include video details,
-              transcripts, and your watch position; AI analysis stays local.
-              Both backends verify your account.
+              {status?.configured
+                ? "The peer configuration is saved on the backend, so you do not need to pair again for each transfer. The peer is contacted when you start a preview."
+                : status
+                  ? "Configure the peer URL, shared secret, and reciprocal installation IDs in both backend environments. Keep the shared secret on the servers."
+                  : "Checking whether the backend pairing is configured."}
             </p>
           </div>
           <button className="workspace-secondary-button" type="button" onClick={() => void refresh()} disabled={busy}>
             <RefreshCw size={16} aria-hidden="true" /> Refresh
           </button>
         </div>
-        <div
-          className={`sync-bridge-status ${status?.configured ? "is-ready" : "is-waiting"}`}
-          role="status"
-          aria-live="polite"
-        >
-          <span className="sync-bridge-status-icon" aria-hidden="true">
-            {status?.configured ? <CircleCheck size={21} /> : <Radar size={21} />}
-          </span>
-          <span>
-            <strong>
-              {status?.configured
-                ? "Peer connection configured"
-                : status
-                  ? "Waiting for peer configuration"
-                  : "Checking peer configuration"}
-            </strong>
-            <small>
-              {status?.configured
-                ? "The AI backend is ready to contact the Non-AI backend."
-                : "Set the peer URL, shared secret, and reciprocal installation IDs in the backend environments."}
-            </small>
-          </span>
+        <div className="sync-bridge-connection-meta">
+          <span><strong>Last successful sync</strong>{lastSyncLabel}</span>
+          <span><strong>Transfer mode</strong>Manual review and confirmation</span>
         </div>
-        <div className="sync-bridge-actions">
-          <button className="workspace-save-button" type="button" disabled={busy || !status?.configured} onClick={() => void runPreview("push")}>
-            <Upload size={16} aria-hidden="true" /> Preview PUSH
-          </button>
-          <button className="workspace-save-button" type="button" disabled={busy || !status?.configured} onClick={() => void runPreview("pull")}>
-            <Download size={16} aria-hidden="true" /> Preview PULL
-          </button>
+        <div className="sync-bridge-directions">
+          <article className="sync-bridge-direction-card">
+            <span className="sync-bridge-direction-icon is-push"><Upload size={17} aria-hidden="true" /></span>
+            <div>
+              <h3>AI <ArrowRight size={14} aria-hidden="true" /> Non-AI</h3>
+              <p>Review AI notes, folders, and playlists to send to your Non-AI workspace.</p>
+            </div>
+            <button className="workspace-save-button" type="button" disabled={busy || !status?.configured} onClick={() => void runPreview("push")}>
+              Preview PUSH
+            </button>
+          </article>
+          <article className="sync-bridge-direction-card">
+            <span className="sync-bridge-direction-icon is-pull"><Download size={17} aria-hidden="true" /></span>
+            <div>
+              <h3>Non-AI <ArrowRight size={14} aria-hidden="true" /> AI</h3>
+              <p>Review Non-AI notes, folders, and playlists to bring into your AI workspace.</p>
+            </div>
+            <button className="workspace-save-button" type="button" disabled={busy || !status?.configured} onClick={() => void runPreview("pull")}>
+              Preview PULL
+            </button>
+          </article>
         </div>
-        <p className="sync-bridge-note">
-          Every preview is read-only. Transfers require explicit selection.
-          Conflicts are never overwritten automatically. Existing synchronization
-          UUIDs are preserved. Video details travel with selected video notes;
-          the Video catalogue is not transferred separately.
-        </p>
+        <div className="sync-bridge-flow-note">
+          <strong>How a transfer works</strong>
+          <span>Preview changes</span><ArrowRight size={14} aria-hidden="true" />
+          <span>Select items</span><ArrowRight size={14} aria-hidden="true" />
+          <span>Confirm transfer</span>
+          <small>Nothing syncs automatically. Conflicts are never overwritten, and video details travel with selected video notes.</small>
+        </div>
       </section>
 
       {preview && (
@@ -411,12 +448,13 @@ export function SyncBridgePage() {
           <label>
             Record type
             <select value={mappingEntity} onChange={(event) => {
-              if (event.target.value === "note" || event.target.value === "folder") {
+              if (event.target.value === "note" || event.target.value === "folder" || event.target.value === "playlist") {
                 setMappingEntity(event.target.value);
               }
             }}>
               <option value="note">Note</option>
               <option value="folder">Folder</option>
+              <option value="playlist">Playlist</option>
             </select>
           </label>
           <label>

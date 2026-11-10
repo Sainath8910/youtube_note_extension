@@ -665,6 +665,10 @@ function TranscriptPanel({
         </button>
       </div>
       {copyError && <p className="video-inline-error" role="alert">{copyError}</p>}
+      <details className="video-transcript-full">
+        <summary>Full transcript</summary>
+        <p>{plainTranscript.replaceAll("\n", " ")}</p>
+      </details>
       <label className="video-search-field transcript-search-field">
         <span className="visually-hidden">Search transcript</span>
         <Search size={15} aria-hidden="true" />
@@ -1069,7 +1073,7 @@ export function VideoDetailPage({
         <AlertCircle size={19} aria-hidden="true" />
         <p>This video ID is invalid.</p>
         <button className="inline-action" type="button" onClick={onBack}>
-          Back to videos
+          Back
         </button>
       </section>
     );
@@ -1105,7 +1109,7 @@ export function VideoDetailPage({
     <section className="video-detail-page">
       <button className="workspace-back-button" type="button" onClick={onBack}>
         <ArrowLeft size={16} aria-hidden="true" />
-        Back to videos
+        Back
       </button>
       <section className="content-card video-detail-header">
         {video.thumbnail_url ? (

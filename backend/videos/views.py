@@ -13,6 +13,7 @@ from rest_framework.views import APIView
 from knowledge.models import KnowledgeChunk
 from notes.models import Note
 from notes.serializers import NoteSerializer
+from playlists.models import Playlist
 
 from knowledge.services.analysis_indexing import index_video_analysis
 from knowledge.services.transcript_indexing import index_video_transcript
@@ -41,12 +42,17 @@ logger = logging.getLogger(__name__)
 _YOUTUBE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
 
-def _videos_for_user(user):
-    return (
-        Video.objects.filter(
-            Q(notes__user=user, notes__deleted_at__isnull=True)
-            | Q(viewing_sessions__user=user)
+def _videos_for_user(user, include_playlist_memberships=False):
+    user_videos = Q(notes__user=user, notes__deleted_at__isnull=True) | Q(
+        viewing_sessions__user=user
+    )
+    if include_playlist_memberships:
+        user_videos |= Q(
+            playlist_items__playlist__user=user,
+            playlist_items__playlist__deleted_at__isnull=True,
         )
+    return (
+        Video.objects.filter(user_videos)
         .annotate(
             notes_count=Count(
                 "notes",
@@ -160,7 +166,33 @@ class VideoLibraryView(APIView):
     sort_orders = {"updated", "added", "title", "notes"}
 
     def get(self, request):
-        videos = _videos_for_user(request.user)
+        playlist_filter = request.query_params.get("playlist_filter", "all")
+        playlist_id = request.query_params.get("playlist_id")
+        if playlist_filter not in {"all", "in_playlist", "not_in_playlist"}:
+            raise ValidationError(
+                {"playlist_filter": "Choose all, in_playlist, or not_in_playlist."},
+            )
+        if playlist_filter == "all":
+            videos = _videos_for_user(request.user)
+        else:
+            if not playlist_id or not playlist_id.isdecimal() or int(playlist_id) < 1:
+                raise ValidationError({"playlist_id": "A valid playlist ID is required."})
+            playlist = get_object_or_404(
+                Playlist,
+                pk=int(playlist_id),
+                user=request.user,
+                deleted_at__isnull=True,
+            )
+            if playlist_filter == "in_playlist":
+                videos = _videos_for_user(
+                    request.user,
+                    include_playlist_memberships=True,
+                ).filter(playlist_items__playlist=playlist)
+            else:
+                videos = _videos_for_user(request.user).exclude(
+                    playlist_items__playlist=playlist,
+                )
+            videos = videos.distinct()
         query = request.query_params.get("q", "").strip()
         if query:
             videos = videos.filter(
@@ -297,7 +329,7 @@ class VideoDetailView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         video = get_object_or_404(
-            _videos_for_user(request.user),
+            _videos_for_user(request.user, include_playlist_memberships=True),
             youtube_id=youtube_id,
         )
         notes = Note.objects.filter(
@@ -326,7 +358,7 @@ class TranscriptView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         video = get_object_or_404(
-            _videos_for_user(request.user),
+            _videos_for_user(request.user, include_playlist_memberships=True),
             youtube_id=youtube_id,
         )
         return self._response(video)
@@ -436,7 +468,9 @@ class VideoAnalysisView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            video = _videos_for_user(request.user).get(
+            video = _videos_for_user(
+                request.user, include_playlist_memberships=True
+            ).get(
                 youtube_id=youtube_id,
             )
         except Video.DoesNotExist:

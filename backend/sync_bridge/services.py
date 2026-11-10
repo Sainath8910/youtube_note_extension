@@ -13,6 +13,7 @@ from django.utils import timezone
 from folders.models import Folder
 from notes.models import Note
 from notes.trash import TRASH_RETENTION
+from playlists.models import Playlist, PlaylistVideo
 from videos.models import Video, ViewingSession
 
 from .models import (
@@ -43,6 +44,30 @@ def installation_uuid():
 
 
 def portable_snapshot(instance):
+    if isinstance(instance, Playlist):
+        return {
+            "sync_uuid": str(instance.sync_uuid),
+            "kind": instance.kind,
+            "title": instance.title,
+            "channel_name": instance.channel_name,
+            "youtube_playlist_id": instance.youtube_playlist_id,
+            "thumbnail_url": instance.thumbnail_url,
+            "playlist_url": instance.playlist_url,
+            "videos": [
+                {
+                    "youtube_id": item.video.youtube_id,
+                    "title": item.video.title,
+                    "channel_name": item.video.channel_name,
+                    "thumbnail_url": item.video.thumbnail_url,
+                    "position": item.position,
+                }
+                for item in instance.items.select_related("video").all()
+            ],
+            "created_at": instance.created_at.isoformat(),
+            "updated_at": instance.updated_at.isoformat(),
+            "deleted_at": instance.deleted_at.isoformat() if instance.deleted_at else None,
+            "trash_batch_id": str(instance.trash_batch_id) if instance.trash_batch_id else None,
+        }
     if isinstance(instance, Folder):
         return {
             "sync_uuid": str(instance.sync_uuid),
@@ -136,7 +161,11 @@ def write_change(owner, entity, record_uuid, snapshot, deleted=False,
 def capture_save(instance):
     if _suppressed.get() or instance.pk is None:
         return
-    entity = "note" if isinstance(instance, Note) else "folder"
+    entity = (
+        "note" if isinstance(instance, Note)
+        else "folder" if isinstance(instance, Folder)
+        else "playlist"
+    )
     write_change(
         instance.user, entity, instance.sync_uuid, portable_snapshot(instance),
         deleted=instance.deleted_at is not None,
@@ -176,7 +205,11 @@ def capture_delete(instance, origin):
         return
     if instance.deleted_at is not None:
         return
-    entity = "note" if isinstance(instance, Note) else "folder"
+    entity = (
+        "note" if isinstance(instance, Note)
+        else "folder" if isinstance(instance, Folder)
+        else "playlist"
+    )
     if origin is not instance:
         state = RecordState.objects.filter(
             owner_id=instance.user_id, entity=entity, record_uuid=instance.sync_uuid
@@ -218,6 +251,7 @@ def snapshot_rows(owner):
     folders.sort(key=lambda folder: (folder_depth(folder), folder.pk))
     for entity, queryset in (
         ("folder", folders),
+        ("playlist", Playlist.objects.filter(user=owner).prefetch_related("items__video")),
         (
             "note",
             Note.objects.filter(user=owner)
@@ -293,6 +327,14 @@ def _resolve_uuid(owner, entity, source_uuid, peer_installation, mapping_id):
     if mapping is None:
         raise ValueError("confirmed_identity_mapping_required")
     return mapping.local_uuid
+
+
+def _record_model(entity):
+    return {
+        "note": Note,
+        "folder": Folder,
+        "playlist": Playlist,
+    }[entity]
 
 
 def _parse_time(value):
@@ -421,7 +463,7 @@ def _record_conflict(owner, operation_id, digest, entity, local_uuid,
 @transaction.atomic
 def apply_change(owner, change, peer_installation):
     entity = change.get("entity")
-    if entity not in {"note", "folder"}:
+    if entity not in {"note", "folder", "playlist"}:
         return {"status": "invalid", "reason": "invalid_entity"}
     try:
         source_uuid = uuid.UUID(change["record_uuid"])
@@ -443,21 +485,14 @@ def apply_change(owner, change, peer_installation):
         )
     except ValueError as error:
         return {"status": "conflict", "reason": str(error)}
-    other_owner = (
-        Note.objects.filter(sync_uuid=local_uuid).exclude(user=owner).exists()
-        if entity == "note"
-        else Folder.objects.filter(sync_uuid=local_uuid).exclude(user=owner).exists()
-    )
+    model = _record_model(entity)
+    other_owner = model.objects.filter(sync_uuid=local_uuid).exclude(user=owner).exists()
     if other_owner:
         return {"status": "conflict", "reason": "identity_owner_conflict"}
     state = RecordState.objects.select_for_update().filter(
         owner=owner, entity=entity, record_uuid=local_uuid
     ).first()
-    existing = (
-        Note.objects.filter(user=owner, sync_uuid=local_uuid).first()
-        if entity == "note"
-        else Folder.objects.filter(user=owner, sync_uuid=local_uuid).first()
-    )
+    existing = model.objects.filter(user=owner, sync_uuid=local_uuid).first()
     if state is None and existing:
         state = RecordState.objects.create(
             owner=owner, entity=entity, record_uuid=local_uuid,
@@ -552,6 +587,88 @@ def apply_change(owner, change, peer_installation):
                             "trash_batch_id": incoming_batch_id,
                         },
                     )
+                elif entity == "playlist":
+                    title = snapshot.get("title")
+                    channel_name = snapshot.get("channel_name", "")
+                    kind = snapshot.get("kind")
+                    playlist_id = snapshot.get("youtube_playlist_id")
+                    thumbnail_url = snapshot.get("thumbnail_url", "")
+                    playlist_url = snapshot.get("playlist_url", "")
+                    videos = snapshot.get("videos")
+                    if (
+                        not isinstance(title, str) or not title.strip() or len(title) > 255
+                        or not isinstance(channel_name, str) or len(channel_name) > 255
+                        or kind not in Playlist.Kind.values
+                        or not isinstance(thumbnail_url, str) or len(thumbnail_url) > 500
+                        or not isinstance(playlist_url, str) or len(playlist_url) > 500
+                        or not isinstance(videos, list) or len(videos) > 5000
+                    ):
+                        raise ValueError("invalid_playlist_snapshot")
+                    if kind == Playlist.Kind.YOUTUBE:
+                        if not isinstance(playlist_id, str) or not re.fullmatch(
+                            r"[A-Za-z0-9_-]{1,128}", playlist_id
+                        ):
+                            raise ValueError("invalid_playlist_snapshot")
+                    elif playlist_id is not None:
+                        raise ValueError("invalid_playlist_snapshot")
+                    record, _ = Playlist.objects.update_or_create(
+                        user=owner,
+                        sync_uuid=local_uuid,
+                        defaults={
+                            "kind": kind,
+                            "title": title,
+                            "channel_name": channel_name,
+                            "youtube_playlist_id": playlist_id,
+                            "thumbnail_url": thumbnail_url,
+                            "playlist_url": playlist_url,
+                            "deleted_at": incoming_deleted_at if change.get("deleted") else None,
+                            "trash_batch_id": incoming_batch_id,
+                        },
+                    )
+                    video_ids = set()
+                    for item in videos:
+                        if not isinstance(item, dict):
+                            raise ValueError("invalid_playlist_video")
+                        youtube_id = item.get("youtube_id")
+                        position = item.get("position")
+                        if (
+                            not isinstance(youtube_id, str)
+                            or not re.fullmatch(r"[A-Za-z0-9_-]{11}", youtube_id)
+                            or not isinstance(position, int)
+                            or isinstance(position, bool)
+                            or position < 0
+                            or youtube_id in video_ids
+                        ):
+                            raise ValueError("invalid_playlist_video")
+                        video_ids.add(youtube_id)
+                        video_data = {}
+                        for field, limit in (
+                            ("title", 500),
+                            ("channel_name", 255),
+                            ("thumbnail_url", 200),
+                        ):
+                            value = item.get(field, "")
+                            if not isinstance(value, str) or len(value) > limit:
+                                raise ValueError("invalid_playlist_video")
+                            video_data[field] = value
+                        video, _ = Video.objects.get_or_create(
+                            youtube_id=youtube_id,
+                            defaults=video_data,
+                        )
+                        changed = [
+                            field for field, value in video_data.items()
+                            if value and not getattr(video, field)
+                        ]
+                        if changed:
+                            for field in changed:
+                                setattr(video, field, video_data[field])
+                            video.save(update_fields=(*changed, "updated_at"))
+                        PlaylistVideo.objects.update_or_create(
+                            playlist=record,
+                            video=video,
+                            defaults={"position": position},
+                        )
+                    record.items.exclude(video__youtube_id__in=video_ids).delete()
                 else:
                     doc = snapshot.get("document")
                     note_type = snapshot.get("note_type", Note.NoteType.STANDALONE)

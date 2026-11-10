@@ -22,7 +22,7 @@ export interface DashboardFolderSearchResult {
 }
 
 export interface DashboardTrashItem {
-  entity: "note" | "folder";
+  entity: "note" | "folder" | "playlist";
   id: number;
   title: string;
   note_type?: "VIDEO" | "STANDALONE";
@@ -246,7 +246,7 @@ export async function deleteDashboardFolder(folderId: number): Promise<void> {
 function isTrashItem(value: unknown): value is DashboardTrashItem {
   return (
     isObject(value) &&
-    (value.entity === "note" || value.entity === "folder") &&
+    (value.entity === "note" || value.entity === "folder" || value.entity === "playlist") &&
     typeof value.id === "number" &&
     Number.isSafeInteger(value.id) &&
     value.id > 0 &&
@@ -255,7 +255,7 @@ function isTrashItem(value: unknown): value is DashboardTrashItem {
     Number.isFinite(Date.parse(value.deleted_at)) &&
     typeof value.expires_at === "string" &&
     Number.isFinite(Date.parse(value.expires_at)) &&
-    (value.entity === "folder" ||
+    (value.entity !== "note" ||
       (value.note_type === "VIDEO" || value.note_type === "STANDALONE"))
   );
 }

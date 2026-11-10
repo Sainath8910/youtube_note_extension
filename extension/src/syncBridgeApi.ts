@@ -1,6 +1,6 @@
 export interface SyncPreviewItem {
   operation_id: string;
-  entity: "note" | "folder";
+  entity: "note" | "folder" | "playlist";
   record_uuid: string;
   destination_uuid: string;
   label: string;
@@ -56,7 +56,7 @@ export interface SyncConflict {
 }
 
 export interface SyncIdentityRecord {
-  entity: "note" | "folder";
+  entity: "note" | "folder" | "playlist";
   record_uuid: string;
   label: string;
   deleted: boolean;
@@ -70,7 +70,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function parseIdentityRecord(value: unknown): SyncIdentityRecord {
   if (
     !isRecord(value) ||
-    (value.entity !== "note" && value.entity !== "folder") ||
+    (value.entity !== "note" && value.entity !== "folder" && value.entity !== "playlist") ||
     typeof value.record_uuid !== "string" ||
     typeof value.label !== "string" ||
     typeof value.deleted !== "boolean" ||
@@ -145,7 +145,7 @@ function parsePreview(value: Record<string, unknown>): SyncPreview {
     if (
       !isRecord(item) ||
       typeof item.operation_id !== "string" ||
-      (item.entity !== "note" && item.entity !== "folder") ||
+      (item.entity !== "note" && item.entity !== "folder" && item.entity !== "playlist") ||
       typeof item.record_uuid !== "string" ||
       typeof item.destination_uuid !== "string" ||
       typeof item.label !== "string" ||
@@ -354,7 +354,7 @@ export async function retryIndexing(noteUuid?: string): Promise<number> {
 
 export async function reconcileIdentity(input: {
   direction: "push" | "pull";
-  entity: "note" | "folder";
+  entity: "note" | "folder" | "playlist";
   localUuid: string;
   peerUuid: string;
   action: "pair" | "defer" | "separate";

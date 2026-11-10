@@ -246,6 +246,25 @@ function sendNoteCommand(
   });
 }
 
+export function sendDashboardApiMessage(
+  message: Record<string, unknown>,
+): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    if (typeof chrome === "undefined" || !chrome.runtime?.id) {
+      reject(new Error("Open this workspace from the YouTube Knowledge browser extension."));
+      return;
+    }
+    chrome.runtime.sendMessage(message, (response: unknown) => {
+      const runtimeError = chrome.runtime.lastError;
+      if (runtimeError) {
+        reject(new Error(runtimeError.message || "Extension request failed."));
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
 export async function updateDashboardNote(
   noteId: number,
   data: { title: string; content: string; document: NoteDocument },

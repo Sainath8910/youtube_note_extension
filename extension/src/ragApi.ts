@@ -122,6 +122,7 @@ export interface PreviousContextResponse {
   success: boolean;
   status: number;
   data: unknown;
+  authRequired?: boolean;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -277,6 +278,7 @@ function sendPreviousContextMessage(
         success: response.success,
         status: response.status,
         data: response.data,
+        authRequired: response.authRequired === true,
       });
     });
   });

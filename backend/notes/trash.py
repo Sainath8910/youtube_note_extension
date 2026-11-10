@@ -6,6 +6,7 @@ from django.db.models import F
 from django.utils import timezone
 
 from folders.models import Folder
+from playlists.models import Playlist
 
 from .models import Note
 
@@ -52,19 +53,11 @@ def trash_folder(folder, now=None):
     deleted_at = now or timezone.now()
     batch_id = uuid.uuid4()
     folders = _folder_subtree(folder.user, folder)
-    folder_ids = {item.pk for item in folders}
 
     for item in folders:
         item.deleted_at = deleted_at
         item.trash_batch_id = batch_id
         item.save(update_fields=("deleted_at", "trash_batch_id", "updated_at"))
-    notes = Note.objects.filter(
-        user=folder.user,
-        folder_id__in=folder_ids,
-        deleted_at__isnull=True,
-    ).select_related("user", "folder", "video")
-    for note in notes:
-        trash_note(note, deleted_at, batch_id)
     return folder
 
 
@@ -104,6 +97,11 @@ def restore_trash(user, entity, pk, now=None):
             user=user, pk=pk, deleted_at__isnull=False
         ).first()
         model = Folder
+    elif entity == "playlist":
+        item = Playlist.objects.filter(
+            user=user, pk=pk, deleted_at__isnull=False
+        ).first()
+        model = Playlist
     else:
         raise ValueError("Unsupported trash entity.")
     if item is None:
@@ -118,12 +116,7 @@ def restore_trash(user, entity, pk, now=None):
         items = list(model.objects.filter(
             user=user, trash_batch_id=batch_id, deleted_at__isnull=False
         ).order_by("pk"))
-    folders = (
-        items if entity == "folder"
-        else list(Folder.objects.filter(
-            user=user, trash_batch_id=batch_id, deleted_at__isnull=False
-        )) if batch_id else []
-    )
+    folders = items if entity == "folder" else []
     if folders:
         _check_restore_folder_names(user, folders, batch_id)
 
@@ -131,18 +124,6 @@ def restore_trash(user, entity, pk, now=None):
         row.deleted_at = None
         row.trash_batch_id = None
         row.save(update_fields=("deleted_at", "trash_batch_id", "updated_at"))
-    if entity == "folder" and batch_id:
-        for note in Note.objects.filter(
-            user=user, trash_batch_id=batch_id, deleted_at__isnull=False
-        ).select_related("user", "folder", "video"):
-            note.deleted_at = None
-            note.trash_batch_id = None
-            note.save(update_fields=("deleted_at", "trash_batch_id", "updated_at"))
-    elif entity == "note" and batch_id:
-        for folder in folders:
-            folder.deleted_at = None
-            folder.trash_batch_id = None
-            folder.save(update_fields=("deleted_at", "trash_batch_id", "updated_at"))
     return item
 
 
@@ -160,6 +141,9 @@ def list_trash(user, now=None):
     ).exclude(
         parent__deleted_at__gt=cutoff,
         parent__trash_batch_id=F("trash_batch_id"),
+    ).order_by("-deleted_at", "-pk")
+    playlists = Playlist.objects.filter(
+        user=user, deleted_at__gt=cutoff
     ).order_by("-deleted_at", "-pk")
 
     entries = [
@@ -183,6 +167,14 @@ def list_trash(user, now=None):
         "deleted_at": folder.deleted_at.isoformat(),
         "expires_at": (folder.deleted_at + TRASH_RETENTION).isoformat(),
     } for folder in folders)
+    entries.extend({
+        "entity": "playlist",
+        "id": playlist.pk,
+        "sync_uuid": str(playlist.sync_uuid),
+        "title": playlist.title,
+        "deleted_at": playlist.deleted_at.isoformat(),
+        "expires_at": (playlist.deleted_at + TRASH_RETENTION).isoformat(),
+    } for playlist in playlists)
     return sorted(entries, key=lambda entry: entry["deleted_at"], reverse=True)
 
 
@@ -191,4 +183,5 @@ def expired_trash(now=None):
     return (
         Note.objects.filter(deleted_at__lte=cutoff),
         Folder.objects.filter(deleted_at__lte=cutoff),
+        Playlist.objects.filter(deleted_at__lte=cutoff),
     )
