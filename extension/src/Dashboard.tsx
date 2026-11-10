@@ -118,6 +118,7 @@ import { TrashPage } from "./TrashPage";
 import { PlaylistsPage } from "./PlaylistsPage";
 import { SyncBridgePage } from "./SyncBridgePage";
 import type { AuthActionResult } from "./authFlow";
+import { TranscriptTranslator } from "./TranscriptTranslator";
 
 type DashboardRoute =
   | "dashboard"
@@ -2546,6 +2547,10 @@ function VideoTranscriptPanel({
         <summary>Full transcript</summary>
         <p>{state.data.transcript.map((segment) => segment.text).join(" ")}</p>
       </details>
+      <TranscriptTranslator
+        transcript={state.data.transcript.map((segment) => segment.text).join(" ")}
+        sourceLanguage={state.data.transcriptLanguage}
+      />
       <ol className="video-transcript-list">
         {state.data.transcript.map((segment, index) => (
           <li key={`${segment.start}-${index}`}>
@@ -3516,7 +3521,10 @@ function NoteWorkspace({
                 )}
             </div>
           ) : mode === "transcript" ? (
-            <VideoTranscriptPanel state={videoContextState} />
+            <VideoTranscriptPanel
+              key={videoMetadata?.youtube_id ?? "no-video"}
+              state={videoContextState}
+            />
           ) : mode === "analysis" ? (
             <VideoAnalysisPanel
               state={videoContextState}

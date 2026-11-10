@@ -17,6 +17,7 @@ import {
   Video as VideoIcon,
 } from "lucide-react";
 import type { DashboardNote } from "./dashboardApi";
+import { TranscriptTranslator } from "./TranscriptTranslator";
 import { AnalysisDisplay } from "./AnalysisDisplay";
 import {
   getDashboardVideoAnalysis,
@@ -669,6 +670,11 @@ function TranscriptPanel({
         <summary>Full transcript</summary>
         <p>{plainTranscript.replaceAll("\n", " ")}</p>
       </details>
+      <TranscriptTranslator
+        key={youtubeId}
+        transcript={plainTranscript.replaceAll("\n", " ")}
+        sourceLanguage={state.data.language}
+      />
       <label className="video-search-field transcript-search-field">
         <span className="visually-hidden">Search transcript</span>
         <Search size={15} aria-hidden="true" />
